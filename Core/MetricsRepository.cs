@@ -1,0 +1,233 @@
+// SPDX-License-Identifier: MPL-2.0
+
+using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Data;
+using STS2RitsuMetrics.Domain;
+
+namespace STS2RitsuMetrics.Core
+{
+    internal sealed class MetricsRepository
+    {
+        private static int _historyReadFailureLogged;
+        private readonly Lock _gate = new();
+        private MutableRunSession? _liveRun;
+        private CombatSnapshot? _retainedCombat;
+
+        internal MutableRunSession? LiveRun
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _liveRun;
+                }
+            }
+        }
+
+        internal void SetLiveRun(MutableRunSession? run)
+        {
+            lock (_gate)
+            {
+                _liveRun = run;
+            }
+        }
+
+        internal CombatSnapshot? GetLiveCombat(bool includeEvents)
+        {
+            lock (_gate)
+            {
+                var active = _liveRun?.GetActiveCombat();
+                return active != null
+                    ? active.Snapshot(includeEvents)
+                    : _retainedCombat == null
+                        ? null
+                        : SnapshotCloner.Clone(_retainedCombat, includeEvents);
+            }
+        }
+
+        internal void RetainCompletedCombat(CombatSnapshot combat)
+        {
+            lock (_gate)
+            {
+                _retainedCombat = SnapshotCloner.Clone(combat, true);
+            }
+        }
+
+        internal bool ClearRetainedCombat()
+        {
+            lock (_gate)
+            {
+                if (_retainedCombat == null)
+                    return false;
+                _retainedCombat = null;
+                return true;
+            }
+        }
+
+        internal RunSnapshot? GetLiveRun(bool includeEvents)
+        {
+            lock (_gate)
+            {
+                return _liveRun?.Snapshot(includeEvents);
+            }
+        }
+
+        internal RunSnapshot? GetLiveRunSummary()
+        {
+            lock (_gate)
+            {
+                return _liveRun?.Snapshot(false, false);
+            }
+        }
+
+        internal IReadOnlyList<RunSnapshot> GetAvailableRuns(bool includeEvents)
+        {
+            var runs = GetSavedRuns().ToList();
+            var live = GetLiveRun(includeEvents);
+            // ReSharper disable once InvertIf
+            if (live != null)
+            {
+                var index = runs.FindIndex(run => run.RunId == live.RunId);
+                if (index < 0)
+                    runs.Add(live);
+                else
+                    runs[index] = live;
+            }
+
+            return runs.Select(run => SnapshotCloner.Clone(run, includeEvents))
+                .OrderByDescending(run => run.StartedAtUtc).ToArray();
+        }
+
+        internal static IReadOnlyList<RunSnapshot> GetSavedRuns(bool includeEvents = true,
+            bool includeTimeline = true)
+        {
+            try
+            {
+                var runs = ModData.History.Runs.Select(run =>
+                    SnapshotCloner.Clone(run, includeEvents, includeTimeline)).ToArray();
+                Volatile.Write(ref _historyReadFailureLogged, 0);
+                return runs;
+            }
+            catch (Exception exception)
+            {
+                LogHistoryReadFailure(exception);
+                return [];
+            }
+        }
+
+        internal static RunSnapshot? GetSavedRun(string runId, bool includeEvents = true)
+        {
+            try
+            {
+                var run = ModData.History.Runs.LastOrDefault(candidate => candidate.RunId == runId);
+                Volatile.Write(ref _historyReadFailureLogged, 0);
+                return run == null ? null : SnapshotCloner.Clone(run, includeEvents);
+            }
+            catch (Exception exception)
+            {
+                LogHistoryReadFailure(exception);
+                return null;
+            }
+        }
+
+        internal static void SaveRunSnapshot(RunSnapshot run)
+        {
+            try
+            {
+                var trim = default(HistoryTrimResult);
+                ModData.ModifyHistory(archive =>
+                {
+                    var index = archive.Runs.FindIndex(existing => existing.RunId == run.RunId);
+                    if (index >= 0)
+                        archive.Runs[index] = run;
+                    else
+                        archive.Runs.Add(run);
+
+                    trim = TrimToCombatLimit(archive.Runs, ModData.Settings.HistoryCombatLimit);
+                }, operation: "run checkpoint");
+                if (trim.RemovedCombats > 0)
+                    Main.Logger.Info(
+                        $"History retention removed {trim.RemovedCombats} old combat(s), including " +
+                        $"{trim.RemovedRuns} complete run record(s), to enforce the {trim.CombatLimit}-combat limit.");
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to persist analytics history: {exception}");
+            }
+        }
+
+        internal static void ClearHistory()
+        {
+            try
+            {
+                ModData.ClearHistory();
+                Main.Logger.Info("Analytics history cleared.");
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to clear analytics history: {exception}");
+            }
+        }
+
+        internal static bool DeleteRun(string runId)
+        {
+            if (string.IsNullOrWhiteSpace(runId))
+                return false;
+            try
+            {
+                var removed = false;
+                ModData.ModifyHistory(archive => { removed = archive.Runs.RemoveAll(run => run.RunId == runId) > 0; },
+                    operation: "delete run");
+                if (removed)
+                    Main.Logger.Info($"Deleted analytics run '{LogId(runId)}'.");
+                else
+                    Main.Logger.Debug($"Analytics run '{LogId(runId)}' was not found for deletion.");
+                return removed;
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to delete analytics run '{runId}': {exception}");
+                return false;
+            }
+        }
+
+        private static HistoryTrimResult TrimToCombatLimit(List<RunSnapshot> runs, int combatLimit)
+        {
+            var limit = Math.Clamp(combatLimit, 10, 500);
+            var originalRunCount = runs.Count;
+            runs.Sort((left, right) => left.StartedAtUtc.CompareTo(right.StartedAtUtc));
+            var total = runs.Sum(run => run.Combats.Count);
+            var originalCombatCount = total;
+            while (total > limit && runs.Count > 0)
+            {
+                if (runs[0].Combats.Count <= total - limit)
+                {
+                    total -= runs[0].Combats.Count;
+                    runs.RemoveAt(0);
+                    continue;
+                }
+
+                var removeCount = total - limit;
+                var first = runs[0];
+                runs[0] = first with { Combats = first.Combats.Skip(removeCount).ToArray() };
+                total -= removeCount;
+            }
+
+            return new(originalRunCount - runs.Count, originalCombatCount - total, limit);
+        }
+
+        private static void LogHistoryReadFailure(Exception exception)
+        {
+            if (Interlocked.Exchange(ref _historyReadFailureLogged, 1) == 0)
+                Main.Logger.Error(
+                    $"Failed to read analytics history; further repeated failures are suppressed: {exception}");
+        }
+
+        private static string LogId(string id)
+        {
+            return id.Length <= 20 ? id : $"{id[..10]}...{id[^7..]}";
+        }
+
+        private readonly record struct HistoryTrimResult(int RemovedRuns, int RemovedCombats, int CombatLimit);
+    }
+}

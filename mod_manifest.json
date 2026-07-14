@@ -1,0 +1,17 @@
+{
+  "id": "STS2-RitsuMetrics",
+  "name": "RitsuMetrics / 律析",
+  "author": "OLC",
+  "description": "Read-only combat analytics with extensible collectors, historical queries, export APIs, and a customizable overlay.",
+  "version": "0.1.4",
+  "min_game_version": "0.107.1",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": false,
+  "dependencies": [
+    {
+      "id": "STS2-RitsuLib",
+      "min_version": "0.4.57"
+    }
+  ]
+}

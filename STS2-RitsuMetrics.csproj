@@ -1,0 +1,49 @@
+<Project Sdk="Godot.NET.Sdk/4.5.1">
+    <PropertyGroup>
+        <RootNamespace>STS2RitsuMetrics</RootNamespace>
+        <AssemblyName>STS2-RitsuMetrics</AssemblyName>
+        <TargetFramework>net9.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>true</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
+        <Copyright>Copyright © 2026 OLC</Copyright>
+        <EnableDynamicLoading>true</EnableDynamicLoading>
+        <NoWarn>$(NoWarn);CS0436</NoWarn>
+        <Sts2Dir Condition="'$(Sts2Dir)' == ''">E:\SteamLibrary\steamapps\common\Slay the Spire 2</Sts2Dir>
+        <Sts2ApiSignatureRoot Condition="'$(Sts2ApiSignatureRoot)' == ''">$(MSBuildProjectDirectory)\..\sts2-api-signatures</Sts2ApiSignatureRoot>
+        <Sts2ApiBaseline>0.107.1</Sts2ApiBaseline>
+        <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and Exists('$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)\sts2.dll')">$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)</Sts2DataDir>
+        <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">$(Sts2Dir)\data_sts2_windows_x86_64</Sts2DataDir>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="STS2.RitsuLib" Version="0.4.57"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Reference Include="sts2" HintPath="$(Sts2DataDir)\sts2.dll" Private="False"/>
+        <Reference Include="0Harmony" HintPath="$(Sts2DataDir)\0Harmony.dll" Private="False"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Include="mod_manifest.json"/>
+        <EmbeddedResource Include="Localization\*.json"
+                          LogicalName="STS2RitsuMetrics.Localization.%(Filename)%(Extension)"/>
+    </ItemGroup>
+
+    <Target Name="ValidateGameInstall" BeforeTargets="ResolveAssemblyReferences">
+        <Error Condition="!Exists('$(Sts2DataDir)\sts2.dll')"
+               Text="Could not find sts2.dll under '$(Sts2DataDir)'. Set Sts2Dir or Sts2DataDir."/>
+    </Target>
+
+    <Target Name="Copy Mod" AfterTargets="Build" Condition="'$(RitsuMetricsCopyToGame)' != 'false'">
+        <PropertyGroup>
+            <RitsuMetricsDeployDir>$(Sts2Dir)\mods\$(MSBuildProjectName)</RitsuMetricsDeployDir>
+        </PropertyGroup>
+        <Message Text="Copying RitsuMetrics to the Slay the Spire 2 mods folder..." Importance="high"/>
+        <MakeDir Directories="$(RitsuMetricsDeployDir)"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(RitsuMetricsDeployDir)"/>
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\mod_manifest.json" DestinationFolder="$(RitsuMetricsDeployDir)"/>
+    </Target>
+</Project>

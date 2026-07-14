@@ -1,0 +1,528 @@
+// SPDX-License-Identifier: MPL-2.0
+
+using Godot;
+using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Localization;
+
+namespace STS2RitsuMetrics.Ui
+{
+    internal sealed partial class OverviewRenderer
+    {
+        private static readonly OverviewSectionDefinition[] Sections =
+        [
+            new(OverviewSection.Offense, "overview.offense", "Offense", MetricIds.DamageDealt,
+                [MetricIds.DamageDealt, MetricIds.DamageAmplified, MetricIds.Overkill, MetricIds.PowersApplied], 0),
+            new(OverviewSection.Defense, "overview.defense", "Defense", MetricIds.DamageTaken,
+                [MetricIds.DamageTaken, MetricIds.DamageBlocked, MetricIds.BlockGained, MetricIds.HealingReceived], 2),
+            new(OverviewSection.Resources, "overview.resources", "Resources", MetricIds.CardsPlayed,
+                [MetricIds.EnergySpent, MetricIds.CardsPlayed, MetricIds.CardsDrawn, MetricIds.CardsExhausted], 3),
+            new(OverviewSection.Analysis, "overview.analysis", "Analysis", MetricIds.DamageAmplified,
+                [MetricIds.DamageAmplified, MetricIds.DamageMitigated, MetricIds.DebuffsApplied, MetricIds.PotionsUsed],
+                4),
+        ];
+
+        private void RenderOverview(DashboardRenderContext context)
+        {
+            Title = ModLocalization.Get("dashboard.overview", "Multidimensional overview");
+            Subtitle = OverviewScopeName(context.Scope);
+            var snapshot = context.Snapshot;
+            if (snapshot == null || snapshot.Players.Count == 0)
+            {
+                Empty(context);
+                return;
+            }
+
+            var players = snapshot.Players.OrderByDescending(player => Metric(player, MetricIds.DamageDealt))
+                .ToArray();
+            var totalDamage = players.Sum(player => Metric(player, MetricIds.DamageDealt));
+            Rows.AddChild(SectionTitle(ModLocalization.Get("overview.playerSummary", "Player summary"),
+                ModLocalization.Format("overview.playerSummary.meta", "{0} players · {1} rounds · {2} damage",
+                    players.Length, snapshot.RoundCount, Format(totalDamage)), context.Style,
+                Accent(context.Style, 0)));
+            Rows.AddChild(BuildPlayerSummary(players, snapshot, totalDamage, context.Style,
+                DashboardPresentation.SingleLine(context.Parameters)));
+
+            Rows.AddChild(SectionTitle(ModLocalization.Get("overview.keyMetrics", "Key metrics"),
+                ModLocalization.Get("overview.keyMetrics.meta", "Offense · defense · resources · effects"),
+                context.Style, Accent(context.Style, 1)));
+            var metricSections = new GridContainer
+            {
+                Columns = 2,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            };
+            metricSections.AddThemeConstantOverride("h_separation", 8);
+            metricSections.AddThemeConstantOverride("v_separation", 8);
+            foreach (var definition in Sections)
+                metricSections.AddChild(BuildMetricSummary(players, definition, context.Style));
+            Rows.AddChild(metricSections);
+
+            Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatFlow", "Combat flow"),
+                ModLocalization.Get("overview.combatFlow.meta", "Damage sources, composition and turn trends"),
+                context.Style, Accent(context.Style, 3)));
+            var flow = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            flow.AddThemeConstantOverride("h_separation", 8);
+            flow.AddThemeConstantOverride("v_separation", 8);
+            flow.AddChild(BuildTopSources(players, Sections[(int)OverviewSection.Offense], context.Style));
+            flow.AddChild(BuildSourceComposition(players, Sections[(int)OverviewSection.Offense], context.Style));
+            flow.AddChild(BuildTurnTrend(snapshot, Sections[(int)OverviewSection.Offense], context.Style));
+            flow.AddChild(BuildTurnTrend(snapshot, Sections[(int)OverviewSection.Defense], context.Style));
+            Rows.AddChild(flow);
+
+            Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatAnalysis", "Combat analysis"),
+                ModLocalization.Get("overview.combatAnalysis.meta", "Records and event composition"), context.Style,
+                Accent(context.Style, 4)));
+            var analysis = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            analysis.AddThemeConstantOverride("h_separation", 8);
+            analysis.AddChild(BuildCombatRecords(snapshot, context.Style));
+            analysis.AddChild(BuildEventComposition(snapshot, context.Style));
+            Rows.AddChild(analysis);
+
+            AccentColor = Accent(context.Style, 0);
+            Status.Text = ModLocalization.Format("overview.status", "{0} · {1} players · {2} rounds",
+                snapshot.EncounterName, players.Length, snapshot.RoundCount);
+        }
+
+        private static GridContainer BuildPlayerSummary(
+            PlayerMetricSnapshot[] players,
+            CombatSnapshot snapshot,
+            decimal totalDamage,
+            DashboardStyleDefinition style,
+            bool singleLine)
+        {
+            var grid = new GridContainer
+            {
+                Columns = 2,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            };
+            grid.AddThemeConstantOverride("h_separation", 8);
+            grid.AddThemeConstantOverride("v_separation", 8);
+            for (var index = 0; index < players.Length; index++)
+            {
+                var player = players[index];
+                var accent = Accent(style, index);
+                var damage = Metric(player, MetricIds.DamageDealt);
+                var energy = Metric(player, MetricIds.EnergySpent);
+                var body = new VBoxContainer();
+                body.AddThemeConstantOverride("separation", 6);
+                body.AddChild(PlayerHeader(player, index + 1, damage, totalDamage, accent, style, singleLine));
+                var kpis = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                kpis.AddThemeConstantOverride("h_separation", 5);
+                kpis.AddThemeConstantOverride("v_separation", 5);
+                kpis.AddChild(Kpi("overview.damage", "Damage", damage, accent, style));
+                kpis.AddChild(Kpi("overview.contribution", "Contribution",
+                    damage + Metric(player, MetricIds.DamageAmplified), Accent(style, 4), style));
+                kpis.AddChild(Kpi("analysis.damagePerTurn", "Damage / turn",
+                    damage / Math.Max(1, snapshot.RoundCount), Accent(style, 1), style));
+                kpis.AddChild(Kpi("analysis.blockGained", "Block gained", Metric(player, MetricIds.BlockGained),
+                    style.PositiveColor, style));
+                kpis.AddChild(Kpi("analysis.damageTaken", "Damage taken", Metric(player, MetricIds.DamageTaken),
+                    style.NegativeColor, style));
+                kpis.AddChild(Kpi("analysis.cardsPlayed", "Cards played", Metric(player, MetricIds.CardsPlayed),
+                    Accent(style, 3), style));
+                var maximumHit = MaximumHit(snapshot, player.PlayerKey);
+                kpis.AddChild(Kpi("overview.maxHit", "Peak hit", maximumHit, style.WarningColor, style));
+                kpis.AddChild(Kpi("analysis.damagePerEnergy", "Damage / energy",
+                    energy > 0m ? damage / energy : 0m, accent, style));
+                body.AddChild(kpis);
+                grid.AddChild(Surface(body, style, accent, 9));
+            }
+
+            if (players.Length % 2 != 0)
+                grid.AddChild(new Control
+                {
+                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                    MouseFilter = Control.MouseFilterEnum.Ignore,
+                });
+
+            return grid;
+        }
+
+        private static Control BuildMetricSummary(
+            PlayerMetricSnapshot[] players,
+            OverviewSectionDefinition definition,
+            DashboardStyleDefinition style)
+        {
+            var title = ModLocalization.Get(definition.LocalizationKey, definition.FallbackName);
+            var body = ChartBody(title, style, Accent(style, definition.AccentIndex));
+            var table = new GridContainer
+            {
+                Columns = definition.Metrics.Count + 1,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            };
+            table.AddThemeConstantOverride("h_separation", 8);
+            table.AddThemeConstantOverride("v_separation", 7);
+            table.AddChild(Label(string.Empty, style, true, Math.Max(10, style.FontSize - 2)));
+            foreach (var metricId in definition.Metrics)
+            {
+                var heading = TruncatedLabel(MetricName(metricId), style, true, Math.Max(10, style.FontSize - 2));
+                heading.CustomMinimumSize = new(72f, 0f);
+                heading.HorizontalAlignment = HorizontalAlignment.Right;
+                heading.TooltipText = heading.Text;
+                table.AddChild(heading);
+            }
+
+            foreach (var player in players)
+                AddMetricRow(player.DisplayName, metricId => Metric(player, metricId), false);
+            if (players.Length > 1)
+                AddMetricRow(ModLocalization.Get("overview.teamTotal", "Team total"),
+                    metricId => players.Sum(player => Metric(player, metricId)), true);
+            body.AddChild(table);
+            return Surface(body, style, Accent(style, definition.AccentIndex));
+
+            void AddMetricRow(string name, Func<string, decimal> value, bool total)
+            {
+                var playerName = TruncatedLabel(name, style, !total, style.FontSize);
+                playerName.TooltipText = name;
+                table.AddChild(playerName);
+                foreach (var metricId in definition.Metrics)
+                {
+                    var amount = Label(Format(value(metricId)), style, false,
+                        total ? style.FontSize + 1 : style.FontSize);
+                    amount.HorizontalAlignment = HorizontalAlignment.Right;
+                    if (total)
+                        amount.Modulate = ColorOf(Accent(style, definition.AccentIndex));
+                    table.AddChild(amount);
+                }
+            }
+        }
+
+        private static Control BuildTopSources(
+            IReadOnlyList<PlayerMetricSnapshot> players,
+            OverviewSectionDefinition definition,
+            DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Get("overview.topSources", "Top sources"), style,
+                Accent(style, definition.AccentIndex));
+            var sources = AggregateSources(players, definition.PrimaryMetric)
+                .OrderByDescending(source => source.Value).Take(8).ToArray();
+            if (sources.Length == 0)
+            {
+                body.AddChild(WrappedLabel(ModLocalization.Get("overlay.noSource", "No source breakdown"), style,
+                    true));
+                return Surface(body, style);
+            }
+
+            var chart = new DashboardBarChart();
+            chart.SetData(sources.Select((source, index) => new DashboardBarDatum(source.Name, source.Value,
+                SourceColor(source.Kind, style, index), Format(source.Value))), Math.Max(11, style.FontSize - 1));
+            body.AddChild(chart);
+
+            return Surface(body, style, Accent(style, definition.AccentIndex));
+        }
+
+        private static Control BuildSourceComposition(
+            IReadOnlyList<PlayerMetricSnapshot> players,
+            OverviewSectionDefinition definition,
+            DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Get("overview.sourceComposition", "Source composition"), style,
+                Accent(style, 5));
+            var kinds = AggregateSources(players, definition.PrimaryMetric)
+                .GroupBy(source => source.Kind)
+                .Select(group => (Kind: group.Key, Value: group.Sum(source => source.Value)))
+                .Where(item => item.Value > 0m)
+                .OrderByDescending(item => item.Value).Take(7).ToArray();
+            if (kinds.Length == 0)
+            {
+                body.AddChild(WrappedLabel(ModLocalization.Get("overlay.noSource", "No source breakdown"), style,
+                    true));
+            }
+            else
+            {
+                var chart = new DashboardDonutChart();
+                chart.SetData(kinds.Select((item, index) => new DashboardDonutDatum(SourceKindName(item.Kind),
+                    item.Value, SourceColor(item.Kind, style, index))), Math.Max(11, style.FontSize - 1));
+                body.AddChild(chart);
+            }
+
+            return Surface(body, style, Accent(style, 5));
+        }
+
+        private static Control BuildTurnTrend(
+            CombatSnapshot snapshot,
+            OverviewSectionDefinition definition,
+            DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Format("overview.turnTrend.section", "{0} turn trend",
+                    ModLocalization.Get(definition.LocalizationKey, definition.FallbackName)), style,
+                Accent(style, definition.AccentIndex));
+            var turns = Timeline(snapshot).Where(item => item.TurnIndex > 0)
+                .GroupBy(item => (item.CombatId, item.TurnIndex))
+                .Select(group => new TurnPoint(group.Min(item => item.OccurredAtUtc), group.Key.TurnIndex,
+                    TurnValue(group, definition.Section)))
+                .Where(item => item.Value > 0m)
+                .OrderBy(item => item.OccurredAtUtc).TakeLast(16).ToArray();
+
+            if (turns.Length == 0)
+            {
+                body.AddChild(WrappedLabel(ModLocalization.Get("overview.noTurnData", "No turn data"), style, true));
+            }
+            else
+            {
+                var chart = new DashboardLineChart();
+                chart.SetData(turns.Select(turn => new DashboardLineDatum($"T{turn.TurnIndex}", turn.Value)),
+                    Accent(style, definition.AccentIndex), Math.Max(11, style.FontSize - 1));
+                body.AddChild(chart);
+            }
+
+            return Surface(body, style, Accent(style, definition.AccentIndex));
+        }
+
+        private static Control BuildCombatRecords(CombatSnapshot snapshot, DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Get("overview.records", "Combat records"), style,
+                style.WarningColor);
+            var timeline = Timeline(snapshot);
+            var outgoingDamage = timeline.Where(item => item is
+                { Damage: not null, Target: null or { Kind: not AnalyticsEntityKind.Player } }).ToArray();
+            var incomingDamage = timeline.Where(item => item is
+                { Damage: not null, Target.Kind: AnalyticsEntityKind.Player }).ToArray();
+            var metrics = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            metrics.AddThemeConstantOverride("h_separation", 12);
+            metrics.AddThemeConstantOverride("v_separation", 8);
+            AddRecord("overview.totalDamage", "Total damage",
+                snapshot.Players.Sum(player => Metric(player, MetricIds.DamageDealt)), style.NegativeColor);
+            AddRecord("overview.maxHit", "Peak hit",
+                outgoingDamage.Select(item => item.Damage!.HpLost).DefaultIfEmpty().Max(), style.NegativeColor);
+            AddRecord("overview.maxRequest", "Peak request",
+                outgoingDamage.Select(item => item.Damage!.RequestedAmount).DefaultIfEmpty().Max(), Accent(style, 1));
+            AddRecord("overview.damageEvents", "Damage events", outgoingDamage.Length, Accent(style, 3));
+            AddRecord("analysis.blocked", "Blocked",
+                incomingDamage.Sum(item => item.Damage!.BlockedAmount), style.PositiveColor);
+            AddRecord("analysis.overkill", "Overkill",
+                outgoingDamage.Sum(item => item.Damage!.OverkillAmount), style.WarningColor);
+            AddRecord("analysis.cardsPlayed", "Cards played",
+                snapshot.Players.Sum(player => Metric(player, MetricIds.CardsPlayed)), Accent(style, 3));
+            AddRecord("analysis.energySpent", "Energy spent",
+                snapshot.Players.Sum(player => Metric(player, MetricIds.EnergySpent)), Accent(style, 1));
+            AddRecord("metric.potionsUsed", "Potions used",
+                snapshot.Players.Sum(player => Metric(player, MetricIds.PotionsUsed)), Accent(style, 5));
+            AddRecord("analysis.extraTurns", "Extra turns",
+                timeline.Count(item => item is
+                    { IsExtraTurn: true, Kind: CombatTimelineKind.Turn, Phase: TimelineEventPhase.Started }),
+                Accent(style, 4));
+            AddRecord("analysis.executions", "Executions",
+                timeline.Count(item => item is
+                    { Kind: CombatTimelineKind.Execution, Target: null or { Kind: not AnalyticsEntityKind.Player } }),
+                style.WarningColor);
+            AddRecord("analysis.deaths", "Deaths",
+                timeline.Count(item => item is
+                {
+                    Kind: CombatTimelineKind.Death,
+                    Phase: TimelineEventPhase.Completed,
+                    Target.Kind: AnalyticsEntityKind.Player,
+                }), style.NegativeColor);
+            body.AddChild(metrics);
+            return Surface(body, style, padding: 9);
+
+            void AddRecord(string localizationKey, string fallback, decimal value, string color)
+            {
+                var record = Kpi(localizationKey, fallback, value, color, style, true);
+                record.CustomMinimumSize = new(0f, Math.Max(54f, style.FontSize + 36f));
+                metrics.AddChild(record);
+            }
+        }
+
+        private static Control BuildEventComposition(CombatSnapshot snapshot, DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Get("overview.eventComposition", "Event composition"), style,
+                Accent(style, 4));
+            var kinds = Timeline(snapshot).Where(item => item.Kind is not CombatTimelineKind.System)
+                .GroupBy(item => item.Kind)
+                .Select(group => (Kind: group.Key, Value: (decimal)group.Count()))
+                .OrderByDescending(item => item.Value).Take(8).ToArray();
+            if (kinds.Length == 0)
+            {
+                body.AddChild(WrappedLabel(ModLocalization.Get("overview.noEventData", "No event data"), style,
+                    true));
+                return Surface(body, style, padding: 9);
+            }
+
+            var chart = new DashboardDonutChart();
+            chart.SetData(kinds.Select((item, index) => new DashboardDonutDatum(
+                    DashboardLocalization.TimelineKind(item.Kind), item.Value, Accent(style, index))),
+                Math.Max(11, style.FontSize - 1));
+            body.AddChild(chart);
+            return Surface(body, style, padding: 9);
+        }
+
+        private static VBoxContainer ChartBody(string title, DashboardStyleDefinition style, string accent)
+        {
+            var body = new VBoxContainer();
+            body.AddThemeConstantOverride("separation", 8);
+            var header = new HBoxContainer { CustomMinimumSize = new(0f, 26f) };
+            header.AddThemeConstantOverride("separation", 7);
+            header.AddChild(new ColorRect
+            {
+                Color = ColorOf(accent),
+                CustomMinimumSize = new(3f, 17f),
+                SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            });
+            var heading = TruncatedLabel(title, style, false, style.FontSize + 2);
+            heading.VerticalAlignment = VerticalAlignment.Center;
+            header.AddChild(heading);
+            body.AddChild(header);
+            return body;
+        }
+
+        private static HBoxContainer SectionTitle(
+            string title,
+            string meta,
+            DashboardStyleDefinition style,
+            string accent)
+        {
+            var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            var heading = TruncatedLabel(title, style, false, style.FontSize + 3);
+            heading.Modulate = ColorOf(accent);
+            row.AddChild(heading);
+            var details = Label(meta, style, true, Math.Max(10, style.FontSize - 1));
+            details.HorizontalAlignment = HorizontalAlignment.Right;
+            row.AddChild(details);
+            return row;
+        }
+
+        private static VBoxContainer Kpi(
+            string localizationKey,
+            string fallback,
+            decimal value,
+            string color,
+            DashboardStyleDefinition style,
+            bool emphasized = false)
+        {
+            var content = new VBoxContainer
+            {
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+            };
+            content.AddThemeConstantOverride("separation", -2);
+            var name = TruncatedLabel(ModLocalization.Get(localizationKey, fallback), style, true,
+                Math.Max(10, style.FontSize - (emphasized ? 1 : 2)));
+            name.TooltipText = name.Text;
+            content.AddChild(name);
+            var amount = Label(Format(value), style, false, style.FontSize + (emphasized ? 5 : 3));
+            amount.Modulate = ColorOf(color);
+            content.AddChild(amount);
+            return content;
+        }
+
+        private static decimal MaximumHit(CombatSnapshot snapshot, string playerKey)
+        {
+            return Timeline(snapshot).Where(item => item.Damage != null)
+                .Select(item => PlayerDamage(item, playerKey)).DefaultIfEmpty().Max();
+        }
+
+        private static decimal PlayerDamage(CombatTimelineEvent timelineEvent, string playerKey)
+        {
+            if (timelineEvent.Damage == null)
+                return 0m;
+            if (timelineEvent.Damage.AttributionShares is { Count: > 0 } shares)
+                return shares.Where(share => share.Contributor.Key == playerKey)
+                    .Sum(share => share.EffectiveContribution);
+            return timelineEvent.Actor?.Key == playerKey ? timelineEvent.Damage.HpLost : 0m;
+        }
+
+        private static decimal TurnValue(
+            IEnumerable<CombatTimelineEvent> events,
+            OverviewSection section)
+        {
+            return section switch
+            {
+                OverviewSection.Offense => events.Where(item => item is
+                        { Damage: not null, Target: null or { Kind: not AnalyticsEntityKind.Player } })
+                    .Sum(item => item.Damage!.HpLost),
+                OverviewSection.Defense => events.Where(item => item is
+                        { Damage: not null, Target.Kind: AnalyticsEntityKind.Player })
+                    .Sum(item => item.Damage!.HpLost + item.Damage.BlockedAmount),
+                OverviewSection.Resources => events.Count(item => item is
+                    { Kind: CombatTimelineKind.CardPlay, Phase: TimelineEventPhase.Started }),
+                _ => events.Where(item => item.Damage != null)
+                    .SelectMany(item => item.Damage!.Contributions)
+                    .Where(item => item.Stage != DamageContributionStage.Base)
+                    .Sum(item => Math.Abs(item.EffectiveContribution)),
+            };
+        }
+
+        private static OverviewSource[] AggregateSources(
+            IReadOnlyList<PlayerMetricSnapshot> players,
+            string metricId)
+        {
+            var values = new Dictionary<string, OverviewSource>(StringComparer.Ordinal);
+            foreach (var player in players)
+            {
+                if (!player.Sources.TryGetValue(metricId, out var sources))
+                    continue;
+                foreach (var source in sources)
+                {
+                    if (!values.TryGetValue(source.SourceKey, out var value))
+                    {
+                        value = new(source.SourceKind, source.DisplayName, 0m);
+                        values.Add(source.SourceKey, value);
+                    }
+
+                    values[source.SourceKey] = value with { Value = value.Value + source.Value };
+                }
+            }
+
+            return values.Values.ToArray();
+        }
+
+        private static string MetricName(string metricId)
+        {
+            var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metricId);
+            return definition == null
+                ? metricId
+                : ModLocalization.Get(definition.NameLocalizationKey, definition.FallbackName);
+        }
+
+        private static string SourceKindName(AnalyticsSourceKind kind)
+        {
+            return ModLocalization.Get($"overview.sourceKind.{kind.ToString().ToLowerInvariant()}", kind.ToString());
+        }
+
+        private static string SourceColor(AnalyticsSourceKind kind, DashboardStyleDefinition style, int index)
+        {
+            return kind switch
+            {
+                AnalyticsSourceKind.Card => Accent(style, 1),
+                AnalyticsSourceKind.Power => Accent(style, 4),
+                AnalyticsSourceKind.Potion => Accent(style, 3),
+                AnalyticsSourceKind.Orb => Accent(style, 5),
+                AnalyticsSourceKind.Relic => style.WarningColor,
+                AnalyticsSourceKind.Creature => style.NegativeColor,
+                AnalyticsSourceKind.Modifier => style.PositiveColor,
+                _ => Accent(style, index),
+            };
+        }
+
+        private static string OverviewScopeName(DashboardDataScope scope)
+        {
+            return scope == DashboardDataScope.CurrentRun
+                ? ModLocalization.Get("overlay.currentRun", "Current run")
+                : ModLocalization.Get("overlay.currentCombat", "Current combat");
+        }
+
+        private enum OverviewSection
+        {
+            Offense,
+            Defense,
+            Resources,
+            Analysis,
+        }
+
+        private sealed record OverviewSectionDefinition(
+            OverviewSection Section,
+            string LocalizationKey,
+            string FallbackName,
+            string PrimaryMetric,
+            IReadOnlyList<string> Metrics,
+            int AccentIndex);
+
+        private sealed record OverviewSource(
+            AnalyticsSourceKind Kind,
+            string Name,
+            decimal Value);
+
+        private sealed record TurnPoint(DateTimeOffset OccurredAtUtc, int TurnIndex, decimal Value);
+    }
+}

@@ -1,0 +1,15 @@
+.godot/
+bin/
+obj/
+/android/
+.vs/
+.idea/
+publish/
+Properties/
+packages/
+*.user
+local.props
+!local.props.template
+godot.log
+*.cache
+.DS_Store
