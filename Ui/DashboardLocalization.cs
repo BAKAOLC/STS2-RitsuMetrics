@@ -116,7 +116,7 @@ namespace STS2RitsuMetrics.Ui
                     timelineEvent.DisplayText),
                 "summon" => Text("timeline.action.summon", "{0} summoned a creature", actor),
                 _ when timelineEvent.Kind == CombatTimelineKind.Effect => Text("timeline.action.effect",
-                    "{0} triggered {1} ({2})", actor, source, timelineEvent.ActionId),
+                    "{0} triggered during {1}", source, EffectContext(timelineEvent.ActionId)),
                 _ => Text("timeline.action.default", "{0}: {1}{2}", actor,
                     string.IsNullOrWhiteSpace(timelineEvent.DisplayText)
                         ? TimelineKind(timelineEvent.Kind)
@@ -125,7 +125,9 @@ namespace STS2RitsuMetrics.Ui
             };
         }
 
-        public static IReadOnlyList<string> TimelineTooltip(CombatTimelineEvent timelineEvent)
+        public static IReadOnlyList<string> TimelineTooltip(
+            CombatTimelineEvent timelineEvent,
+            CombatTimelineEvent? parent = null)
         {
             var lines = new List<string>
             {
@@ -138,7 +140,8 @@ namespace STS2RitsuMetrics.Ui
             if (timelineEvent.IsExtraTurn)
                 lines.Add(ModLocalization.Get("analysis.extraTurn", "Extra turn"));
             if (timelineEvent.ParentEventId != null)
-                lines.Add(Text("timeline.tooltip.parent", "Caused by: {0}", timelineEvent.ParentEventId));
+                lines.Add(Text("timeline.tooltip.parent", "Caused by: {0}",
+                    parent == null ? timelineEvent.ParentEventId : TimelineDescription(parent)));
             if (timelineEvent.Damage is { } damage)
                 lines.Add(Text("timeline.tooltip.damage",
                     "Requested {0} · modified {1} · HP {2} · Block {3} · overkill {4}",
@@ -165,6 +168,31 @@ namespace STS2RitsuMetrics.Ui
             return Enum.TryParse<DamageContributionStage>(value, out var stage)
                 ? ContributionStage(stage)
                 : value;
+        }
+
+        private static string EffectContext(string hookName)
+        {
+            var key = hookName switch
+            {
+                _ when ContainsAny(hookName, "Damage", "HpLost") => "damage",
+                _ when ContainsAny(hookName, "Block") => "block",
+                _ when ContainsAny(hookName, "Card", "Hand", "Draw", "Flush", "Shuffle") => "card",
+                _ when ContainsAny(hookName, "Power") => "power",
+                _ when ContainsAny(hookName, "Death", "Died", "Doom") => "death",
+                _ when ContainsAny(hookName, "Turn") => "turn",
+                _ when ContainsAny(hookName, "Energy", "Gold", "Stars") => "resource",
+                _ when ContainsAny(hookName, "Potion") => "potion",
+                _ when ContainsAny(hookName, "Orb") => "orb",
+                _ when ContainsAny(hookName, "Summon") => "summon",
+                _ when ContainsAny(hookName, "Combat") => "combat",
+                _ => "generic",
+            };
+            return ModLocalization.Get($"timeline.effectContext.{key}", key);
+        }
+
+        private static bool ContainsAny(string value, params string[] candidates)
+        {
+            return candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
         }
 
         private static string Pile(string value)

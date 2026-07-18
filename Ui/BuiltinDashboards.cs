@@ -161,11 +161,11 @@ namespace STS2RitsuMetrics.Ui
             Toolbar = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             Toolbar.AddThemeConstantOverride("separation", 6);
             View.AddChild(Toolbar);
-            var scroll = new DashboardScrollContainer();
+            Scroll = new();
             Rows = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             Rows.AddThemeConstantOverride("separation", 4);
-            scroll.SetContent(Rows);
-            View.AddChild(scroll);
+            Scroll.SetContent(Rows);
+            View.AddChild(Scroll);
             _footer = new() { ClipContents = true };
             _footer.AddThemeConstantOverride("separation", (int)FooterSeparation);
             _footer.Resized += UpdateFooterLayout;
@@ -190,6 +190,7 @@ namespace STS2RitsuMetrics.Ui
         }
 
         protected HBoxContainer Toolbar { get; }
+        protected DashboardScrollContainer Scroll { get; }
         protected VBoxContainer Rows { get; }
         protected Label Status { get; }
         public string? CompactSubtitle { get; protected set; }
@@ -1376,11 +1377,11 @@ namespace STS2RitsuMetrics.Ui
                 events = events.Where(item => IsPlayerEvent(item, playerKey));
             if (search.Length > 0)
                 events = events.Where(item => SearchText(item).Contains(search, StringComparison.OrdinalIgnoreCase));
-            var selected = events.TakeLast(1500).Reverse().ToArray();
+            var selected = SelectEvents(events);
             foreach (var timelineEvent in selected)
                 Rows.AddChild(CreateRow(timelineEvent, context.Style));
             Status.Text = ModLocalization.Format("dashboard.timeline.status", "{0} events · {1} rounds",
-                selected.Length, snapshot.RoundCount);
+                selected.Count, snapshot.RoundCount);
         }
 
         protected abstract bool Include(CombatTimelineEvent timelineEvent);
@@ -1390,6 +1391,12 @@ namespace STS2RitsuMetrics.Ui
             IEnumerable<CombatTimelineEvent> timelineEvents)
         {
             return timelineEvents;
+        }
+
+        protected virtual IReadOnlyList<CombatTimelineEvent> SelectEvents(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            return timelineEvents.OrderBy(item => item.Sequence).TakeLast(1500).ToArray();
         }
 
         protected virtual Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
@@ -1516,11 +1523,27 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class TimelineRenderer : FilteredTimelineRenderer
     {
-        private Dictionary<string, int> _depthByEventId = new(StringComparer.Ordinal);
+        private const int MaxVisibleDepth = 6;
+        private readonly HashSet<string> _autoCollapseDecided = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+        private Dictionary<string, string[]> _ancestorsByEventId = new(StringComparer.Ordinal);
+        private Dictionary<string, CombatTimelineEvent[]> _childrenByParentId = new(StringComparer.Ordinal);
+        private Dictionary<string, int> _descendantsByEventId = new(StringComparer.Ordinal);
+        private Dictionary<string, CombatTimelineEvent> _eventById = new(StringComparer.Ordinal);
+        private DashboardRenderContext? _lastContext;
+        private string? _snapshotId;
 
         protected override void Render(DashboardRenderContext context)
         {
-            _depthByEventId = BuildDepthMap(context.Snapshot == null ? [] : Timeline(context.Snapshot));
+            var snapshotId = context.Snapshot?.CombatId;
+            if (!string.Equals(snapshotId, _snapshotId, StringComparison.Ordinal))
+            {
+                _snapshotId = snapshotId;
+                _collapsed.Clear();
+                _autoCollapseDecided.Clear();
+            }
+
+            _lastContext = context;
             base.Render(context);
         }
 
@@ -1543,19 +1566,18 @@ namespace STS2RitsuMetrics.Ui
             return CollapseSemanticCardMoves(timelineEvents);
         }
 
+        protected override IReadOnlyList<CombatTimelineEvent> SelectEvents(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            var window = timelineEvents.OrderBy(item => item.Sequence).TakeLast(1500).ToArray();
+            BuildTreeState(window);
+            return OrderCausally(window).Where(IsVisible).ToArray();
+        }
+
         protected override Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
         {
             var row = new HBoxContainer { CustomMinimumSize = new(0, style.RowHeight + 2) };
-            row.AddThemeConstantOverride("separation", 8);
-            var depth = _depthByEventId.GetValueOrDefault(timelineEvent.EventId);
-            if (depth > 0)
-            {
-                var branch = Label("↳", style, true, Math.Max(9, style.FontSize - 2));
-                branch.CustomMinimumSize = new(Math.Min(depth, 6) * 10f + 12f, 0f);
-                branch.HorizontalAlignment = HorizontalAlignment.Right;
-                branch.VerticalAlignment = VerticalAlignment.Center;
-                row.AddChild(branch);
-            }
+            row.AddThemeConstantOverride("separation", 7);
 
             var color = timelineEvent.Kind switch
             {
@@ -1582,28 +1604,190 @@ namespace STS2RitsuMetrics.Ui
             kind.Modulate = ColorOf(color);
             kind.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(kind);
+
+            var ancestors = _ancestorsByEventId.GetValueOrDefault(timelineEvent.EventId) ?? [];
+            if (ancestors.Length > 0)
+                row.AddChild(new TimelineHierarchyGuide(ancestors.Select(ancestor =>
+                    ColorOf(Accent(style, StableColorIndex(ancestor)))).ToArray(), MaxVisibleDepth));
+            if (ancestors.Length > MaxVisibleDepth)
+            {
+                var depth = Label($"L{ancestors.Length}", style, true, Math.Max(9, style.FontSize - 2));
+                depth.CustomMinimumSize = new(30f, 0f);
+                depth.HorizontalAlignment = HorizontalAlignment.Center;
+                depth.VerticalAlignment = VerticalAlignment.Center;
+                depth.Modulate = ColorOf(style.SecondaryTextColor);
+                row.AddChild(depth);
+            }
+
+            var descendantCount = _descendantsByEventId.GetValueOrDefault(timelineEvent.EventId);
+            var hasChildren = descendantCount > 0;
+            if (hasChildren)
+            {
+                var collapsed = _collapsed.Contains(timelineEvent.EventId);
+                var toggle = new Button
+                {
+                    Text = collapsed ? "▸" : "▾",
+                    TooltipText = ModLocalization.Format(collapsed
+                            ? "timeline.branch.expand"
+                            : "timeline.branch.collapse",
+                        collapsed ? "Expand {0} linked events" : "Collapse {0} linked events", descendantCount),
+                };
+                DashboardControlTheme.ApplyIconButton(toggle, DashboardButtonKind.Subtle, style, true);
+                toggle.Pressed += () => ToggleBranch(timelineEvent.EventId);
+                row.AddChild(toggle);
+            }
+            else
+            {
+                row.AddChild(new Control
+                    { CustomMinimumSize = new(28f, 0f), MouseFilter = Control.MouseFilterEnum.Ignore });
+            }
+
             var label = TruncatedLabel(RowText(timelineEvent), style,
                 timelineEvent.Kind == CombatTimelineKind.DamageModifier);
             label.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(label);
-            DashboardTooltip.Set(row, DashboardLocalization.TimelineTooltip(timelineEvent));
+            if (_collapsed.Contains(timelineEvent.EventId))
+            {
+                var hidden = Label($"+{descendantCount}", style, true, Math.Max(9, style.FontSize - 2));
+                hidden.CustomMinimumSize = new(40f, 0f);
+                hidden.HorizontalAlignment = HorizontalAlignment.Right;
+                hidden.VerticalAlignment = VerticalAlignment.Center;
+                hidden.Modulate = ColorOf(style.SecondaryTextColor);
+                row.AddChild(hidden);
+            }
+
+            _eventById.TryGetValue(timelineEvent.ParentEventId ?? string.Empty, out var parent);
+            DashboardTooltip.Set(row, DashboardLocalization.TimelineTooltip(timelineEvent, parent));
             return row;
         }
 
-        private static Dictionary<string, int> BuildDepthMap(
-            IReadOnlyList<CombatTimelineEvent> timelineEvents)
+        private void BuildTreeState(CombatTimelineEvent[] timelineEvents)
         {
-            var depths = new Dictionary<string, int>(timelineEvents.Count, StringComparer.Ordinal);
-            foreach (var timelineEvent in timelineEvents.OrderBy(item => item.Sequence))
+            _eventById = timelineEvents.ToDictionary(item => item.EventId, StringComparer.Ordinal);
+            _childrenByParentId = timelineEvents
+                .Where(item => item.ParentEventId != null && _eventById.ContainsKey(item.ParentEventId))
+                .GroupBy(item => item.ParentEventId!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key,
+                    group => group.OrderBy(item => item.Sequence).ToArray(),
+                    StringComparer.Ordinal);
+            _ancestorsByEventId = new(timelineEvents.Length, StringComparer.Ordinal);
+            _descendantsByEventId = new(timelineEvents.Length, StringComparer.Ordinal);
+            foreach (var timelineEvent in timelineEvents)
             {
-                var depth = timelineEvent.ParentEventId != null &&
-                            depths.TryGetValue(timelineEvent.ParentEventId, out var parentDepth)
-                    ? parentDepth + 1
-                    : 0;
-                depths[timelineEvent.EventId] = depth;
+                ResolveAncestors(timelineEvent, []);
+                CountDescendants(timelineEvent.EventId, []);
             }
 
-            return depths;
+            foreach (var timelineEvent in timelineEvents.Where(item => item.Kind == CombatTimelineKind.Damage &&
+                                                                       _childrenByParentId.TryGetValue(item.EventId,
+                                                                           out var children) &&
+                                                                       children.All(child =>
+                                                                           child.Kind == CombatTimelineKind
+                                                                               .DamageModifier)))
+                if (_autoCollapseDecided.Add(timelineEvent.EventId))
+                    _collapsed.Add(timelineEvent.EventId);
+        }
+
+        private string[] ResolveAncestors(CombatTimelineEvent timelineEvent, HashSet<string> visiting)
+        {
+            if (_ancestorsByEventId.TryGetValue(timelineEvent.EventId, out var cached))
+                return cached;
+            if (!visiting.Add(timelineEvent.EventId) || timelineEvent.ParentEventId == null ||
+                !_eventById.TryGetValue(timelineEvent.ParentEventId, out var parent))
+                return _ancestorsByEventId[timelineEvent.EventId] = [];
+            var ancestors = ResolveAncestors(parent, visiting).Append(parent.EventId).ToArray();
+            visiting.Remove(timelineEvent.EventId);
+            return _ancestorsByEventId[timelineEvent.EventId] = ancestors;
+        }
+
+        private int CountDescendants(string eventId, HashSet<string> visiting)
+        {
+            if (_descendantsByEventId.TryGetValue(eventId, out var cached))
+                return cached;
+            if (!visiting.Add(eventId) || !_childrenByParentId.TryGetValue(eventId, out var children))
+                return _descendantsByEventId[eventId] = 0;
+            var count = children.Sum(child => 1 + CountDescendants(child.EventId, visiting));
+            visiting.Remove(eventId);
+            return _descendantsByEventId[eventId] = count;
+        }
+
+        private bool IsVisible(CombatTimelineEvent timelineEvent)
+        {
+            return !_ancestorsByEventId.GetValueOrDefault(timelineEvent.EventId, [])
+                .Any(_collapsed.Contains);
+        }
+
+        private List<CombatTimelineEvent> OrderCausally(
+            CombatTimelineEvent[] timelineEvents)
+        {
+            var earliestByEventId = new Dictionary<string, long>(timelineEvents.Length, StringComparer.Ordinal);
+            var emitted = new HashSet<string>(StringComparer.Ordinal);
+            var ordered = new List<CombatTimelineEvent>(timelineEvents.Length);
+            var roots = timelineEvents
+                .Where(item => item.ParentEventId == null || !_eventById.ContainsKey(item.ParentEventId))
+                .OrderBy(item => EarliestSequence(item.EventId, earliestByEventId, []))
+                .ThenBy(item => item.Sequence);
+            foreach (var root in roots)
+                AppendBranch(root, ordered, emitted, earliestByEventId);
+            foreach (var remaining in timelineEvents.Where(item => !emitted.Contains(item.EventId))
+                         .OrderBy(item => item.Sequence))
+                AppendBranch(remaining, ordered, emitted, earliestByEventId);
+            return ordered;
+        }
+
+        private long EarliestSequence(
+            string eventId,
+            Dictionary<string, long> cache,
+            HashSet<string> visiting)
+        {
+            if (cache.TryGetValue(eventId, out var cached))
+                return cached;
+            if (!_eventById.TryGetValue(eventId, out var timelineEvent) || !visiting.Add(eventId))
+                return long.MaxValue;
+            var earliest = timelineEvent.Sequence;
+            if (_childrenByParentId.TryGetValue(eventId, out var children))
+                earliest = children.Aggregate(earliest,
+                    (current, child) => Math.Min(current, EarliestSequence(child.EventId, cache, visiting)));
+            visiting.Remove(eventId);
+            return cache[eventId] = earliest;
+        }
+
+        private void AppendBranch(
+            CombatTimelineEvent timelineEvent,
+            List<CombatTimelineEvent> ordered,
+            HashSet<string> emitted,
+            Dictionary<string, long> earliestByEventId)
+        {
+            if (!emitted.Add(timelineEvent.EventId))
+                return;
+            ordered.Add(timelineEvent);
+            if (!_childrenByParentId.TryGetValue(timelineEvent.EventId, out var children))
+                return;
+            foreach (var child in children.OrderBy(item =>
+                         EarliestSequence(item.EventId, earliestByEventId, [])).ThenBy(item => item.Sequence))
+                AppendBranch(child, ordered, emitted, earliestByEventId);
+        }
+
+        private void ToggleBranch(string eventId)
+        {
+            if (!_collapsed.Add(eventId))
+                _collapsed.Remove(eventId);
+            if (_lastContext == null)
+                return;
+            var scrollPosition = Scroll.ScrollVertical;
+            Refresh(_lastContext);
+            Callable.From(() => Scroll.ScrollVertical = scrollPosition).CallDeferred();
+        }
+
+        private static int StableColorIndex(string value)
+        {
+            const uint offset = 2166136261;
+            const uint prime = 16777619;
+            var hash = offset;
+            // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator
+            foreach (var character in value)
+                hash = (hash ^ character) * prime;
+            return (int)(hash & 0x7FFFFFFF);
         }
     }
 
