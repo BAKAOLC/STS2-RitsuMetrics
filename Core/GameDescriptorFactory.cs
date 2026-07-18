@@ -40,6 +40,11 @@ namespace STS2RitsuMetrics.Core
             return player == null ? null : Player(player);
         }
 
+        internal static EntityDescriptor? PlayerBody(Creature? creature)
+        {
+            return creature?.Player is { } player ? Player(player) : null;
+        }
+
         internal static EntityDescriptor Player(Player player)
         {
             ArgumentNullException.ThrowIfNull(player);

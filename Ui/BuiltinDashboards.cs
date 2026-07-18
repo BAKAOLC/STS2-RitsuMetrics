@@ -1210,6 +1210,16 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class CardLogRenderer : FilteredTimelineRenderer
     {
+        private Dictionary<string, CombatTimelineEvent> _eventById = new(StringComparer.Ordinal);
+
+        protected override void Render(DashboardRenderContext context)
+        {
+            _eventById = context.Snapshot == null
+                ? new(StringComparer.Ordinal)
+                : Timeline(context.Snapshot).ToDictionary(item => item.EventId, StringComparer.Ordinal);
+            base.Render(context);
+        }
+
         protected override bool Include(CombatTimelineEvent timelineEvent)
         {
             if (timelineEvent.Kind == CombatTimelineKind.Attack)
@@ -1225,7 +1235,9 @@ namespace STS2RitsuMetrics.Ui
 
         protected override string RowText(CombatTimelineEvent timelineEvent)
         {
-            return $"[T{timelineEvent.TurnIndex}] {DashboardLocalization.TimelineDescription(timelineEvent)}";
+            var origin = CausalOrigin(timelineEvent);
+            return $"[T{timelineEvent.TurnIndex}] " +
+                   DashboardLocalization.TimelineDescription(timelineEvent, origin.Source, origin.Actor);
         }
 
         protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
@@ -1252,8 +1264,28 @@ namespace STS2RitsuMetrics.Ui
             var label = TruncatedLabel(RowText(timelineEvent), style);
             row.AddChild(label);
             var surface = Surface(row, style, badgeColor, 4);
-            DashboardTooltip.Set(surface, DashboardLocalization.TimelineTooltip(timelineEvent));
+            _eventById.TryGetValue(timelineEvent.ParentEventId ?? string.Empty, out var parent);
+            var origin = CausalOrigin(timelineEvent);
+            DashboardTooltip.Set(surface,
+                DashboardLocalization.TimelineTooltip(timelineEvent, parent, origin.Source, origin.Actor));
             return surface;
+        }
+
+        private (EntityDescriptor? Actor, SourceDescriptor? Source) CausalOrigin(
+            CombatTimelineEvent timelineEvent)
+        {
+            EntityDescriptor? actor = null;
+            var parentId = timelineEvent.ParentEventId;
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            while (parentId != null && visited.Add(parentId) && _eventById.TryGetValue(parentId, out var parent))
+            {
+                actor ??= parent.Actor;
+                if (parent.Source != null && parent.Source.Key != timelineEvent.Source?.Key)
+                    return (actor, parent.Source);
+                parentId = parent.ParentEventId;
+            }
+
+            return (actor, null);
         }
     }
 
@@ -1268,28 +1300,34 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var totalTaken = snapshot.Players.Sum(item => Metric(item, MetricIds.DamageTaken));
-            var ranked = snapshot.Players.OrderByDescending(item => Metric(item, MetricIds.DamageTaken)).ToArray();
+            var totalTaken = snapshot.Players.Sum(item => SnapshotStatistics.Survival(snapshot, item.PlayerNetId)
+                .PlayerHpLost);
+            var ranked = snapshot.Players.OrderByDescending(item =>
+                SnapshotStatistics.Survival(snapshot, item.PlayerNetId).PlayerHpLost).ToArray();
             for (var index = 0; index < ranked.Length; index++)
             {
                 var player = ranked[index];
-                var taken = Metric(player, MetricIds.DamageTaken);
+                var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
+                var taken = survival.PlayerHpLost;
                 var blocked = Metric(player, MetricIds.DamageBlocked);
-                var deaths = Timeline(snapshot).Count(item =>
-                    item is { Kind: CombatTimelineKind.Death, Phase: TimelineEventPhase.Completed } &&
-                    item.Target?.PlayerNetId == player.PlayerNetId);
                 var accent = Accent(context.Style, index);
                 var card = new VBoxContainer();
                 card.AddThemeConstantOverride("separation", 5);
                 card.AddChild(PlayerHeader(player, index + 1, taken, totalTaken, accent, context.Style,
                     DashboardPresentation.SingleLine(context.Parameters)));
                 card.AddChild(SegmentedMeter(ModLocalization.Format("dashboard.received.summary",
-                        "{0} HP lost · {1} blocked · {2} deaths", Format(taken), Format(blocked), deaths),
+                        "{0} HP lost · {1} blocked · {2} deaths", Format(taken), Format(blocked),
+                        survival.PlayerDeaths),
                     taken,
                     blocked,
                     context.Style.NegativeColor,
                     Accent(context.Style, 1),
                     context.Style));
+                if (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 })
+                    card.AddChild(WrappedLabel(ModLocalization.Format("dashboard.received.summonSummary",
+                            "Summons: {0} HP lost · {1} deaths", Format(survival.SummonHpLost),
+                            survival.SummonDeaths),
+                        context.Style, true, Math.Max(10, context.Style.FontSize - 1)));
                 Rows.AddChild(Surface(card, context.Style, accent));
             }
 
@@ -1300,7 +1338,7 @@ namespace STS2RitsuMetrics.Ui
             var events = Timeline(snapshot).Where(item =>
                     item.Kind is CombatTimelineKind.Damage or CombatTimelineKind.HpLoss or
                         CombatTimelineKind.Execution or CombatTimelineKind.Death &&
-                    item.Target?.Kind == AnalyticsEntityKind.Player)
+                    item.Target?.Kind is AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon)
                 .TakeLast(200).Reverse();
             foreach (var timelineEvent in events)
             {
@@ -1557,7 +1595,8 @@ namespace STS2RitsuMetrics.Ui
             var extra = timelineEvent.IsExtraTurn
                 ? $" [{ModLocalization.Get("analysis.extraTurn", "Extra turn")}]"
                 : string.Empty;
-            return $"{DashboardLocalization.TimelineDescription(timelineEvent)}{extra}";
+            var origin = CausalOrigin(timelineEvent);
+            return $"{DashboardLocalization.TimelineDescription(timelineEvent, origin.Source, origin.Actor)}{extra}";
         }
 
         protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
@@ -1657,8 +1696,27 @@ namespace STS2RitsuMetrics.Ui
             }
 
             _eventById.TryGetValue(timelineEvent.ParentEventId ?? string.Empty, out var parent);
-            DashboardTooltip.Set(row, DashboardLocalization.TimelineTooltip(timelineEvent, parent));
+            var origin = CausalOrigin(timelineEvent);
+            DashboardTooltip.Set(row,
+                DashboardLocalization.TimelineTooltip(timelineEvent, parent, origin.Source, origin.Actor));
             return row;
+        }
+
+        private (EntityDescriptor? Actor, SourceDescriptor? Source) CausalOrigin(
+            CombatTimelineEvent timelineEvent)
+        {
+            EntityDescriptor? actor = null;
+            var parentId = timelineEvent.ParentEventId;
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            while (parentId != null && visited.Add(parentId) && _eventById.TryGetValue(parentId, out var parent))
+            {
+                actor ??= parent.Actor;
+                if (parent.Source != null && parent.Source.Key != timelineEvent.Source?.Key)
+                    return (actor, parent.Source);
+                parentId = parent.ParentEventId;
+            }
+
+            return (actor, null);
         }
 
         private void BuildTreeState(CombatTimelineEvent[] timelineEvents)
@@ -1794,7 +1852,22 @@ namespace STS2RitsuMetrics.Ui
     internal sealed class DamageBreakdownRenderer : DashboardRendererBase
     {
         private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+
+        private readonly LineEdit _search = new()
+        {
+            PlaceholderText = ModLocalization.Get("dashboard.damage.search", "Search source, target or modifier"),
+            ClearButtonEnabled = true,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+
         private DashboardRenderContext? _lastContext;
+
+        internal DamageBreakdownRenderer()
+        {
+            DashboardControlTheme.ApplySearch(_search, density: DashboardControlDensity.Compact);
+            Toolbar.AddChild(_search);
+            _search.TextChanged += _ => RefreshLastPreservingScroll();
+        }
 
         protected override void Render(DashboardRenderContext context)
         {
@@ -1806,7 +1879,13 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var events = Timeline(snapshot).Where(item => item.Damage != null).TakeLast(200).Reverse().ToArray();
+            var search = _search.Text.Trim();
+            var events = Timeline(snapshot).Where(item => item.Damage != null &&
+                                                          (search.Length == 0 || DamageSearchText(item).Contains(search,
+                                                              StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(item => item.Sequence)
+                .TakeLast(500)
+                .ToArray();
             foreach (var timelineEvent in events)
             {
                 var expanded = _expanded.Contains(timelineEvent.EventId);
@@ -1816,8 +1895,7 @@ namespace STS2RitsuMetrics.Ui
                 {
                     if (!_expanded.Add(timelineEvent.EventId))
                         _expanded.Remove(timelineEvent.EventId);
-                    if (_lastContext != null)
-                        Refresh(_lastContext);
+                    RefreshLastPreservingScroll();
                 }));
                 if (expanded)
                     group.AddChild(DamageEventDetails(timelineEvent, context.Style));
@@ -1871,22 +1949,29 @@ namespace STS2RitsuMetrics.Ui
             row.AddChild(identity);
             var flow = Label($"{Format(damage.RequestedAmount)} → {Format(damage.ModifiedAmount)}", style, true,
                 Math.Max(10, style.FontSize - 1));
-            flow.CustomMinimumSize = new(110f, 0f);
+            flow.Text = ModLocalization.Format("dashboard.damage.flow", "Requested {0} → modified {1}",
+                Format(damage.RequestedAmount), Format(damage.ModifiedAmount));
+            flow.CustomMinimumSize = new(170f, 0f);
             flow.HorizontalAlignment = HorizontalAlignment.Right;
             flow.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(flow);
-            var result = Label(Format(damage.HpLost + damage.BlockedAmount), style, false, style.FontSize + 3);
-            result.CustomMinimumSize = new(62f, 0f);
+            var result = Label(ModLocalization.Format("dashboard.damage.actual", "Actual {0}",
+                Format(damage.HpLost + damage.BlockedAmount)), style, false, style.FontSize + 1);
+            result.CustomMinimumSize = new(90f, 0f);
             result.HorizontalAlignment = HorizontalAlignment.Right;
             result.VerticalAlignment = VerticalAlignment.Center;
             result.Modulate = ColorOf(style.NegativeColor);
             row.AddChild(result);
-            var count = Label($"×{damage.Contributions.Count}", style, true, Math.Max(9, style.FontSize - 2));
-            count.CustomMinimumSize = new(38f, 0f);
+            var modifierCount = damage.Contributions.Count(item =>
+                item.Stage != DamageContributionStage.Base && item.EffectiveContribution != 0m);
+            var count = Label(ModLocalization.Format("dashboard.damage.modifierCount", "{0} modifiers", modifierCount),
+                style, true, Math.Max(9, style.FontSize - 2));
+            count.CustomMinimumSize = new(78f, 0f);
             count.HorizontalAlignment = HorizontalAlignment.Right;
             count.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(count);
             panel.AddChild(row);
+            DashboardTooltip.Set(panel, DashboardLocalization.TimelineTooltip(timelineEvent));
             return panel;
         }
 
@@ -1897,6 +1982,9 @@ namespace STS2RitsuMetrics.Ui
             var damage = timelineEvent.Damage!;
             var details = new VBoxContainer();
             details.AddThemeConstantOverride("separation", 8);
+            details.AddChild(WrappedLabel(ModLocalization.Get("dashboard.damage.stageHint",
+                    "Requested is the initial amount; modified is after effects; actual is HP lost plus Block absorbed."),
+                style, true, Math.Max(10, style.FontSize - 1)));
             var stages = new DashboardBarChart();
             stages.SetData([
                 new(ModLocalization.Get("dashboard.damage.requestedLabel", "Requested"),
@@ -1914,7 +2002,7 @@ namespace STS2RitsuMetrics.Ui
             var contributions = damage.Contributions.Where(item => item.EffectiveContribution != 0m).ToArray();
             if (contributions.Length > 0)
             {
-                var heading = Label(ModLocalization.Get("dashboard.damage.contributions", "Contributions"), style,
+                var heading = Label(ModLocalization.Get("dashboard.damage.contributions", "Damage modifiers"), style,
                     true, Math.Max(10, style.FontSize - 1));
                 details.AddChild(heading);
                 var chart = new DashboardBarChart();
@@ -1932,6 +2020,8 @@ namespace STS2RitsuMetrics.Ui
             if (damage.AttributionShares is not { Count: > 0 })
                 return Surface(details, style, padding: 8);
 
+            details.AddChild(Label(ModLocalization.Get("dashboard.damage.attribution", "Attribution allocation"),
+                style, true, Math.Max(10, style.FontSize - 1)));
             var attribution = new HBoxContainer();
             attribution.AddThemeConstantOverride("separation", 12);
             foreach (var share in damage.AttributionShares)
@@ -1948,9 +2038,31 @@ namespace STS2RitsuMetrics.Ui
             var box = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             box.AddThemeConstantOverride("separation", -2);
             box.AddChild(TruncatedLabel(share.Contributor.DisplayName, style, false, style.FontSize));
-            box.AddChild(TruncatedLabel($"{Format(share.EffectiveContribution)} · {share.Weight:P1} · " +
-                                        share.Source.DisplayName, style, true, Math.Max(9, style.FontSize - 2)));
+            box.AddChild(TruncatedLabel(ModLocalization.Format("dashboard.damage.attributionValue",
+                    "Contribution {0} · weight {1:P1} · source {2}", Format(share.EffectiveContribution), share.Weight,
+                    share.Source.DisplayName),
+                style, true, Math.Max(9, style.FontSize - 2)));
             return box;
+        }
+
+        private static string DamageSearchText(CombatTimelineEvent timelineEvent)
+        {
+            var contributions = string.Join(' ', timelineEvent.Damage?.Contributions.Select(contribution =>
+                $"{DashboardLocalization.ContributionStage(contribution.Stage)} " +
+                $"{contribution.Source.DisplayName} {contribution.Source.ModelId}") ?? []);
+            return string.Join(' ', DashboardLocalization.TimelineDescription(timelineEvent),
+                timelineEvent.Actor?.DisplayName, timelineEvent.Target?.DisplayName,
+                timelineEvent.Source?.DisplayName, timelineEvent.Source?.ModelId,
+                contributions);
+        }
+
+        private void RefreshLastPreservingScroll()
+        {
+            if (_lastContext == null)
+                return;
+            var scrollPosition = Scroll.ScrollVertical;
+            Refresh(_lastContext);
+            Callable.From(() => Scroll.ScrollVertical = scrollPosition).CallDeferred();
         }
 
         private static StyleBoxFlat DamageEventStyle(DashboardStyleDefinition style, bool hover)

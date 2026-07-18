@@ -42,6 +42,12 @@ namespace STS2RitsuMetrics.Core
             Register(new(MetricIds.DamageTaken, "metric.damageTaken", "Damage taken",
                 MetricValueKind.Amount, "damage",
                 false));
+            Register(new(MetricIds.Deaths, "metric.deaths", "Deaths", MetricValueKind.Count,
+                "survival", false));
+            Register(new(MetricIds.SummonDamageTaken, "metric.summonDamageTaken", "Summon HP lost",
+                MetricValueKind.Amount, "survival", false));
+            Register(new(MetricIds.SummonDeaths, "metric.summonDeaths", "Summon deaths",
+                MetricValueKind.Count, "survival", false));
             Register(new(MetricIds.DamageBlocked, "metric.damageBlocked", "Damage blocked",
                 MetricValueKind.Amount,
                 "damage"));

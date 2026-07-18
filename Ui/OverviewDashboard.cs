@@ -53,7 +53,7 @@ namespace STS2RitsuMetrics.Ui
             metricSections.AddThemeConstantOverride("h_separation", 8);
             metricSections.AddThemeConstantOverride("v_separation", 8);
             foreach (var definition in Sections)
-                metricSections.AddChild(BuildMetricSummary(players, definition, context.Style));
+                metricSections.AddChild(BuildMetricSummary(players, snapshot, definition, context.Style));
             Rows.AddChild(metricSections);
 
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatFlow", "Combat flow"),
@@ -102,6 +102,7 @@ namespace STS2RitsuMetrics.Ui
                 var accent = Accent(style, index);
                 var damage = Metric(player, MetricIds.DamageDealt);
                 var energy = Metric(player, MetricIds.EnergySpent);
+                var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var body = new VBoxContainer();
                 body.AddThemeConstantOverride("separation", 6);
                 body.AddChild(PlayerHeader(player, index + 1, damage, totalDamage, accent, style, singleLine));
@@ -115,8 +116,14 @@ namespace STS2RitsuMetrics.Ui
                     damage / Math.Max(1, snapshot.RoundCount), Accent(style, 1), style));
                 kpis.AddChild(Kpi("analysis.blockGained", "Block gained", Metric(player, MetricIds.BlockGained),
                     style.PositiveColor, style));
-                kpis.AddChild(Kpi("analysis.damageTaken", "Damage taken", Metric(player, MetricIds.DamageTaken),
+                kpis.AddChild(Kpi("analysis.damageTaken", "Damage taken", survival.PlayerHpLost,
                     style.NegativeColor, style));
+                kpis.AddChild(Kpi("analysis.deaths", "Deaths", survival.PlayerDeaths,
+                    style.NegativeColor, style));
+                kpis.AddChild(Kpi("analysis.summonHpLost", "Summon HP lost", survival.SummonHpLost,
+                    style.WarningColor, style));
+                kpis.AddChild(Kpi("analysis.summonDeaths", "Summon deaths", survival.SummonDeaths,
+                    style.WarningColor, style));
                 kpis.AddChild(Kpi("analysis.cardsPlayed", "Cards played", Metric(player, MetricIds.CardsPlayed),
                     Accent(style, 3), style));
                 var maximumHit = MaximumHit(snapshot, player.PlayerKey);
@@ -139,6 +146,7 @@ namespace STS2RitsuMetrics.Ui
 
         private static Control BuildMetricSummary(
             PlayerMetricSnapshot[] players,
+            CombatSnapshot snapshot,
             OverviewSectionDefinition definition,
             DashboardStyleDefinition style)
         {
@@ -162,10 +170,10 @@ namespace STS2RitsuMetrics.Ui
             }
 
             foreach (var player in players)
-                AddMetricRow(player.DisplayName, metricId => Metric(player, metricId), false);
+                AddMetricRow(player.DisplayName, metricId => Value(player, metricId), false);
             if (players.Length > 1)
                 AddMetricRow(ModLocalization.Get("overview.teamTotal", "Team total"),
-                    metricId => players.Sum(player => Metric(player, metricId)), true);
+                    metricId => players.Sum(player => Value(player, metricId)), true);
             body.AddChild(table);
             return Surface(body, style, Accent(style, definition.AccentIndex));
 
@@ -184,6 +192,13 @@ namespace STS2RitsuMetrics.Ui
                         amount.Modulate = ColorOf(Accent(style, definition.AccentIndex));
                     table.AddChild(amount);
                 }
+            }
+
+            decimal Value(PlayerMetricSnapshot player, string metricId)
+            {
+                return metricId == MetricIds.DamageTaken
+                    ? SnapshotStatistics.Survival(snapshot, player.PlayerNetId).PlayerHpLost
+                    : Metric(player, metricId);
             }
         }
 
@@ -278,6 +293,8 @@ namespace STS2RitsuMetrics.Ui
                 { Damage: not null, Target: null or { Kind: not AnalyticsEntityKind.Player } }).ToArray();
             var incomingDamage = timeline.Where(item => item is
                 { Damage: not null, Target.Kind: AnalyticsEntityKind.Player }).ToArray();
+            var survival = snapshot.Players.Aggregate(default(SurvivalStatistics),
+                (total, player) => total + SnapshotStatistics.Survival(snapshot, player.PlayerNetId));
             var metrics = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             metrics.AddThemeConstantOverride("h_separation", 12);
             metrics.AddThemeConstantOverride("v_separation", 8);
@@ -307,13 +324,10 @@ namespace STS2RitsuMetrics.Ui
                 timeline.Count(item => item is
                     { Kind: CombatTimelineKind.Execution, Target: null or { Kind: not AnalyticsEntityKind.Player } }),
                 style.WarningColor);
-            AddRecord("analysis.deaths", "Deaths",
-                timeline.Count(item => item is
-                {
-                    Kind: CombatTimelineKind.Death,
-                    Phase: TimelineEventPhase.Completed,
-                    Target.Kind: AnalyticsEntityKind.Player,
-                }), style.NegativeColor);
+            AddRecord("analysis.hpLost", "HP lost", survival.PlayerHpLost, style.NegativeColor);
+            AddRecord("analysis.deaths", "Deaths", survival.PlayerDeaths, style.NegativeColor);
+            AddRecord("analysis.summonHpLost", "Summon HP lost", survival.SummonHpLost, style.WarningColor);
+            AddRecord("analysis.summonDeaths", "Summon deaths", survival.SummonDeaths, style.WarningColor);
             body.AddChild(metrics);
             return Surface(body, style, padding: 9);
 

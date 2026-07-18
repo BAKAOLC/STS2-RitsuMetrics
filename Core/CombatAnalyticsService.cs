@@ -787,6 +787,7 @@ namespace STS2RitsuMetrics.Core
                         : nameof(AttributionConfidence.Heuristic))), damageDealer);
 
             var receivingPlayer = GameDescriptorFactory.Player(damageReceiver);
+            var receivingPlayerBody = GameDescriptorFactory.PlayerBody(damageReceiver);
             if (receivingPlayer == null)
             {
                 foreach (var share in AggregateShares(attributionShares)
@@ -805,13 +806,17 @@ namespace STS2RitsuMetrics.Core
                     receiver, tags, MetricIds.EffectiveHpDamageContribution);
             }
 
-            if (receivingPlayer != null && hpLost > 0)
-                Record(receivingPlayer, MetricIds.DamageTaken, hpLost, source,
+            if (receivingPlayerBody != null && hpLost > 0)
+                Record(receivingPlayerBody, MetricIds.DamageTaken, hpLost, source,
                     GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
+            else if (receivingPlayer != null && receiver.Kind == AnalyticsEntityKind.Summon && hpLost > 0)
+                Record(receivingPlayer, MetricIds.SummonDamageTaken, hpLost, source,
+                    GameDescriptorFactory.CreatureOrNull(damageDealer), WithActorTags(tags, damageReceiver));
             if (receivingPlayer != null && blocked > 0)
             {
-                Record(receivingPlayer, MetricIds.DamageBlocked, blocked, source,
-                    GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
+                if (receivingPlayerBody != null)
+                    Record(receivingPlayerBody, MetricIds.DamageBlocked, blocked, source,
+                        GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
                 RecordBlockedContribution(damageReceiver, receivingPlayer, blocked,
                     GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
             }
@@ -1092,6 +1097,9 @@ namespace STS2RitsuMetrics.Core
 
             var player = GameDescriptorFactory.Player(entry.Applier);
             var cause = CausalScopeRuntime.Snapshot();
+            var causalActor = GameDescriptorFactory.ModelOwner(cause?.OriginModel) ??
+                              GameDescriptorFactory.ModelOwner(cause?.Model);
+            var causalSource = cause?.OriginSource ?? cause?.Source;
             switch (entry.Amount)
             {
                 case > 0m when player != null:
@@ -1103,12 +1111,14 @@ namespace STS2RitsuMetrics.Core
             }
 
             AddTimeline(CombatTimelineKind.Power, TimelineEventPhase.Instant, "power.change", source.DisplayName,
-                player ?? GameDescriptorFactory.CreatureOrNull(entry.Applier),
+                player ?? GameDescriptorFactory.CreatureOrNull(entry.Applier) ?? causalActor,
                 GameDescriptorFactory.Creature(entry.Actor),
                 source, entry.Amount,
                 Details(("power_type", entry.Power.GetTypeForAmount(entry.Amount).ToString()),
                     ("result_amount", (entry.Power.Amount + entry.Amount).ToString(CultureInfo.InvariantCulture)),
-                    ("origin_event_id", cause?.EventId ?? string.Empty)));
+                    ("origin_event_id", cause?.OriginEventId ?? string.Empty),
+                    ("cause_source_key", causalSource?.Key ?? string.Empty),
+                    ("cause_source_name", causalSource?.DisplayName ?? string.Empty)));
             if (player == null || entry.Amount <= 0m)
                 return;
             var tags = WithActorTags(null, entry.Applier);
@@ -1291,9 +1301,13 @@ namespace STS2RitsuMetrics.Core
                             share.Confidence));
                 }
 
-            if (receivingPlayer != null)
-                Record(receivingPlayer, MetricIds.DamageTaken, amount, sourceDescriptor, actor,
+            if (GameDescriptorFactory.PlayerBody(evt.Creature) is { } receivingPlayerBody)
+                Record(receivingPlayerBody, MetricIds.DamageTaken, amount, sourceDescriptor, actor,
                     Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")));
+            else if (receivingPlayer != null && target.Kind == AnalyticsEntityKind.Summon)
+                Record(receivingPlayer, MetricIds.SummonDamageTaken, amount, sourceDescriptor, actor,
+                    WithActorTags(Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")),
+                        evt.Creature));
         }
 
         private static bool IsReliableExecutionAttribution(DamageAttributionShare share)
@@ -1390,12 +1404,24 @@ namespace STS2RitsuMetrics.Core
 
         private void OnCreatureDied(CreatureDiedEvent evt)
         {
+            var target = GameDescriptorFactory.Creature(evt.Creature);
             AddTimeline(CombatTimelineKind.Death, TimelineEventPhase.Completed, "death.end",
-                GameDescriptorFactory.Creature(evt.Creature).DisplayName,
-                target: GameDescriptorFactory.Creature(evt.Creature),
+                target.DisplayName,
+                target: target,
                 occurredAtUtc: evt.OccurredAtUtc,
                 details: Details(("removal_prevented", evt.WasRemovalPrevented.ToString()),
                     ("animation_seconds", evt.DeathAnimationDurationSeconds.ToString(CultureInfo.InvariantCulture))));
+            var receivingPlayer = GameDescriptorFactory.Player(evt.Creature);
+            switch (target.Kind)
+            {
+                case AnalyticsEntityKind.Player when receivingPlayer != null:
+                    Record(receivingPlayer, MetricIds.Deaths, 1m, GameDescriptorFactory.Environment());
+                    break;
+                case AnalyticsEntityKind.Summon when receivingPlayer != null:
+                    Record(receivingPlayer, MetricIds.SummonDeaths, 1m,
+                        GameDescriptorFactory.CreatureSource(evt.Creature), tags: WithActorTags(null, evt.Creature));
+                    break;
+            }
         }
 
         private void RecordCardAction(CardModel card, string metricId)
@@ -1473,11 +1499,15 @@ namespace STS2RitsuMetrics.Core
             var combat = _activeCombat;
             if (run == null || combat == null)
                 return null;
+            var resolvedParentEventId = parentEventId ??
+                                        (bypassScope
+                                            ? null
+                                            : CausalScopeRuntime.ResolveParentEventId() ?? _activeTurnEventId);
             var sequence = Interlocked.Increment(ref _timelineSequence);
             var timelineEvent = new CombatTimelineEvent(
                 sequence,
                 eventId ?? $"timeline:{sequence}",
-                parentEventId ?? (bypassScope ? null : CausalScopeRuntime.ResolveParentEventId() ?? _activeTurnEventId),
+                resolvedParentEventId,
                 run.RunId,
                 combat.CombatId,
                 occurredAtUtc ?? DateTimeOffset.UtcNow,

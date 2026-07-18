@@ -75,6 +75,7 @@ namespace STS2RitsuMetrics.Ui
                 var rounds = Math.Max(1, snapshot.RoundCount);
                 var energy = Metric(player, MetricIds.EnergySpent);
                 var cards = Metric(player, MetricIds.CardsPlayed);
+                var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var accent = Accent(context.Style, index);
                 var content = new VBoxContainer();
                 content.AddThemeConstantOverride("separation", 6);
@@ -83,7 +84,12 @@ namespace STS2RitsuMetrics.Ui
                 content.AddChild(MetricGrid(context.Style,
                 [
                     Stat("analysis.damagePerTurn", "Damage / turn", damage / rounds, context.Style.NegativeColor),
-                    Stat("analysis.damageTaken", "Damage taken", Metric(player, MetricIds.DamageTaken),
+                    Stat("analysis.damageTaken", "Damage taken", survival.PlayerHpLost,
+                        context.Style.WarningColor),
+                    Stat("analysis.deaths", "Deaths", survival.PlayerDeaths, context.Style.NegativeColor),
+                    Stat("analysis.summonHpLost", "Summon HP lost", survival.SummonHpLost,
+                        context.Style.WarningColor),
+                    Stat("analysis.summonDeaths", "Summon deaths", survival.SummonDeaths,
                         context.Style.WarningColor),
                     Stat("analysis.blocked", "Damage blocked", Metric(player, MetricIds.DamageBlocked),
                         context.Style.PositiveColor),
@@ -157,10 +163,12 @@ namespace STS2RitsuMetrics.Ui
             }
 
             foreach (var (player, index) in snapshot.Players
-                         .OrderByDescending(player => Metric(player, MetricIds.DamageTaken))
+                         .OrderByDescending(player => SnapshotStatistics.Survival(snapshot, player.PlayerNetId)
+                             .PlayerHpLost)
                          .Select((player, index) => (player, index)))
             {
-                var taken = Metric(player, MetricIds.DamageTaken);
+                var (taken, deaths, summonHpLost, summonDeaths) =
+                    SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var blocked = Metric(player, MetricIds.DamageBlocked);
                 var gained = Metric(player, MetricIds.BlockGained);
                 var energy = Metric(player, MetricIds.EnergySpent);
@@ -190,8 +198,13 @@ namespace STS2RitsuMetrics.Ui
                         context.Style.WarningColor),
                     Stat("analysis.cardsExhausted", "Cards exhausted", Metric(player, MetricIds.CardsExhausted),
                         context.Style.NegativeColor),
+                    Stat("analysis.deaths", "Deaths", deaths, context.Style.NegativeColor),
+                    Stat("analysis.summonHpLost", "Summon HP lost", summonHpLost,
+                        context.Style.WarningColor),
+                    Stat("analysis.summonDeaths", "Summon deaths", summonDeaths,
+                        context.Style.WarningColor),
                 ]));
-                AddIncomingSources(content, player, context.Style);
+                AddIncomingSources(content, snapshot, player, context.Style);
                 Rows.AddChild(Surface(content, context.Style, accent));
             }
 
@@ -391,8 +404,14 @@ namespace STS2RitsuMetrics.Ui
                 context.Style.NegativeColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damageTaken", "Damage taken"),
                 ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    combat.Players.Sum(player => Metric(player, MetricIds.DamageTaken)))),
+                    TotalSurvival(combat).PlayerHpLost)),
                 context.Style.WarningColor, context.Style));
+            charts.AddChild(TrendChart(ModLocalization.Get("analysis.summonHpLost", "Summon HP lost"),
+                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
+                    TotalSurvival(combat).SummonHpLost)), Accent(context.Style, 4), context.Style));
+            charts.AddChild(TrendChart(ModLocalization.Get("analysis.summonDeaths", "Summon deaths"),
+                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
+                    TotalSurvival(combat).SummonDeaths)), context.Style.NegativeColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.blocked", "Blocked"),
                 ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
                     combat.Players.Sum(player => Metric(player, MetricIds.DamageBlocked)))),
@@ -406,7 +425,7 @@ namespace STS2RitsuMetrics.Ui
             foreach (var combat in ordered)
             {
                 var damage = TotalDamage(combat);
-                var taken = combat.Players.Sum(player => Metric(player, MetricIds.DamageTaken));
+                var (taken, _, summonHpLost, summonDeaths) = TotalSurvival(combat);
                 var blocked = combat.Players.Sum(player => Metric(player, MetricIds.DamageBlocked));
                 var cards = combat.Players.Sum(player => Metric(player, MetricIds.CardsPlayed));
                 var rounds = Math.Max(1, combat.RoundCount);
@@ -425,6 +444,10 @@ namespace STS2RitsuMetrics.Ui
                     context.Style.WarningColor, context.Style));
                 row.AddChild(CompactMetric(ModLocalization.Get("analysis.blocked", "Blocked"), blocked,
                     context.Style.PositiveColor, context.Style));
+                row.AddChild(CompactMetric(ModLocalization.Get("analysis.summonHpLost", "Summon HP lost"),
+                    summonHpLost, context.Style.WarningColor, context.Style));
+                row.AddChild(CompactMetric(ModLocalization.Get("analysis.summonDeaths", "Summon deaths"),
+                    summonDeaths, context.Style.NegativeColor, context.Style));
                 row.AddChild(CompactMetric(ModLocalization.Get("analysis.cardsPerTurn", "Cards / turn"),
                     cards / rounds, Accent(context.Style, 3), context.Style));
                 Rows.AddChild(Surface(row, context.Style, padding: 5));
@@ -505,16 +528,39 @@ namespace STS2RitsuMetrics.Ui
                 records.Count, combats.Count);
         }
 
-        private static void AddIncomingSources(VBoxContainer content, PlayerMetricSnapshot player,
+        private static void AddIncomingSources(VBoxContainer content, CombatSnapshot snapshot,
+            PlayerMetricSnapshot player,
             DashboardStyleDefinition style)
         {
-            if (!player.Sources.TryGetValue(MetricIds.DamageTaken, out var sources) || sources.Count == 0)
+            var timelineSources = Timeline(snapshot)
+                .Where(timelineEvent => timelineEvent.Target is
+                {
+                    Kind: AnalyticsEntityKind.Player,
+                    PlayerNetId: not null,
+                } && timelineEvent.Target.PlayerNetId == player.PlayerNetId)
+                .Select(timelineEvent => new
+                {
+                    timelineEvent.Source,
+                    Value = SnapshotStatistics.EffectiveHpLost(timelineEvent),
+                })
+                .Where(item => item.Source != null && item.Value > 0m)
+                .GroupBy(item => item.Source!.Key, StringComparer.Ordinal)
+                .Select(group => new IncomingSource(group.First().Source!.DisplayName,
+                    group.Sum(item => item.Value), group.Count()))
+                .OrderByDescending(source => source.Value)
+                .ToArray();
+            var sources = timelineSources.Length > 0
+                ? timelineSources
+                : player.Sources.GetValueOrDefault(MetricIds.DamageTaken, [])
+                    .Select(source => new IncomingSource(source.DisplayName, source.Value, source.Occurrences))
+                    .ToArray();
+            if (sources.Length == 0)
                 return;
             content.AddChild(Label(ModLocalization.Get("analysis.incomingSources", "Top incoming sources"), style,
                 true));
             var maximum = Math.Max(1m, sources.Max(source => source.Value));
             foreach (var source in sources.Take(5))
-                content.AddChild(Meter(source.DisplayName, $"{Format(source.Value)} · ×{source.Occurrences}",
+                content.AddChild(Meter(source.Name, $"{Format(source.Value)} · ×{source.Occurrences}",
                     source.Value, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
         }
 
@@ -826,6 +872,12 @@ namespace STS2RitsuMetrics.Ui
             return combat.Players.Sum(player => Metric(player, MetricIds.DamageDealt));
         }
 
+        private static SurvivalStatistics TotalSurvival(CombatSnapshot combat)
+        {
+            return combat.Players.Aggregate(default(SurvivalStatistics),
+                (total, player) => total + SnapshotStatistics.Survival(combat, player.PlayerNetId));
+        }
+
         private static string DamageEventLabel(CombatTimelineEvent timelineEvent)
         {
             return $"{timelineEvent.Source?.DisplayName ?? timelineEvent.DisplayText} → " +
@@ -902,6 +954,8 @@ namespace STS2RitsuMetrics.Ui
         private sealed record StatCell(string Caption, string ValueText, decimal Value, string Color);
 
         private sealed record NamedValue(string Name, decimal Value);
+
+        private sealed record IncomingSource(string Name, decimal Value, int Occurrences);
 
         private sealed record RecordRow(string LocalizationKey, string Fallback, string Detail, decimal Value);
 

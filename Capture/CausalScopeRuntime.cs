@@ -20,7 +20,10 @@ namespace STS2RitsuMetrics.Capture
         string? ParentEventId,
         AbstractModel? Model,
         SourceDescriptor? Source,
-        string ActionId);
+        string ActionId,
+        string OriginEventId,
+        AbstractModel? OriginModel,
+        SourceDescriptor? OriginSource);
 
     internal static class CaptureBridge
     {
@@ -89,8 +92,11 @@ namespace STS2RitsuMetrics.Capture
             if (frame == null)
                 return null;
             Materialize(frame, fallback);
+            var origin = frame;
+            while (origin.Parent is { Model: not null, Source: not null } parent)
+                origin = parent;
             return new(frame.EventId, ParentId(frame, fallback), frame.Model, frame.Source,
-                frame.ActionId);
+                frame.ActionId, origin.EventId, origin.Model, origin.Source);
         }
 
         private static void Materialize(ScopeFrame frame, string? fallback)

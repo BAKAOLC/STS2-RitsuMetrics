@@ -38,10 +38,13 @@ namespace STS2RitsuMetrics.Ui
             return ModLocalization.Get($"overview.sourceKind.{kind.ToString().ToLowerInvariant()}", kind.ToString());
         }
 
-        public static string TimelineDescription(CombatTimelineEvent timelineEvent)
+        public static string TimelineDescription(
+            CombatTimelineEvent timelineEvent,
+            SourceDescriptor? causalSource = null,
+            EntityDescriptor? causalActor = null)
         {
-            var actor = timelineEvent.Actor?.DisplayName ??
-                        ModLocalization.Get("timeline.entity.unknown", "Unknown actor");
+            var actor = timelineEvent.Actor?.DisplayName ?? causalActor?.DisplayName ??
+                ModLocalization.Get("timeline.entity.unknown", "Unknown actor");
             var target = timelineEvent.Target?.DisplayName ??
                          ModLocalization.Get("timeline.entity.noTarget", "no target");
             var source = timelineEvent.Source?.DisplayName ?? timelineEvent.DisplayText;
@@ -90,8 +93,7 @@ namespace STS2RitsuMetrics.Ui
                     ContributionStageName(Detail(timelineEvent, "stage")), Signed(timelineEvent.Value)),
                 "block.gain" => Text("timeline.action.blockGain", "{0} gained {1} Block from {2}", target,
                     value, source),
-                "power.change" => Text("timeline.action.powerChange", "{0} changed {1}'s {2} by {3} (now {4})",
-                    actor, target, source, Signed(timelineEvent.Value), Detail(timelineEvent, "result_amount")),
+                "power.change" => PowerDescription(timelineEvent, actor, target, source, causalSource),
                 "healing" => Text("timeline.action.healing", "{0} healed {1} for {2}", source, target, value),
                 "hp.loss" => Text("timeline.action.hpLoss", "{0} lost {1} HP from {2}", target, value, source),
                 "execution" => Text("timeline.action.execution", "{0} executed {1}, removing {2} HP", source,
@@ -127,11 +129,13 @@ namespace STS2RitsuMetrics.Ui
 
         public static IReadOnlyList<string> TimelineTooltip(
             CombatTimelineEvent timelineEvent,
-            CombatTimelineEvent? parent = null)
+            CombatTimelineEvent? parent = null,
+            SourceDescriptor? causalSource = null,
+            EntityDescriptor? causalActor = null)
         {
             var lines = new List<string>
             {
-                TimelineDescription(timelineEvent),
+                TimelineDescription(timelineEvent, causalSource, causalActor),
                 Text("timeline.tooltip.position", "Round {0} · Turn {1} · {2}", timelineEvent.Round,
                     timelineEvent.TurnIndex, TurnSide(timelineEvent.Side)),
                 Text("timeline.tooltip.action", "Action: {0} · {1}", timelineEvent.ActionId,
@@ -150,6 +154,23 @@ namespace STS2RitsuMetrics.Ui
             foreach (var (key, detail) in timelineEvent.Details.Where(item => !string.IsNullOrWhiteSpace(item.Value)))
                 lines.Add($"{key}: {detail}");
             return lines;
+        }
+
+        private static string PowerDescription(
+            CombatTimelineEvent timelineEvent,
+            string actor,
+            string target,
+            string power,
+            SourceDescriptor? causalSource)
+        {
+            var cause = Detail(timelineEvent, "cause_source_name");
+            if (string.IsNullOrWhiteSpace(cause))
+                cause = causalSource?.DisplayName ?? string.Empty;
+            return string.IsNullOrWhiteSpace(cause) || string.Equals(cause, power, StringComparison.CurrentCulture)
+                ? Text("timeline.action.powerChange", "{0} changed {1}'s {2} by {3} (now {4})",
+                    actor, target, power, Signed(timelineEvent.Value), Detail(timelineEvent, "result_amount"))
+                : Text("timeline.action.powerChangedBySource", "{0} changed {1}'s {2} by {3} (now {4})",
+                    cause, target, power, Signed(timelineEvent.Value), Detail(timelineEvent, "result_amount"));
         }
 
         private static string DamageDescription(CombatTimelineEvent timelineEvent, string source, string target)

@@ -9,6 +9,9 @@ namespace STS2RitsuMetrics.Api
         public const string EffectiveHpDamageDealt = "core.damage.effective_hp.dealt";
         public const string EffectiveHpDamageContribution = "core.damage.effective_hp.contribution";
         public const string DamageTaken = "core.damage.taken";
+        public const string Deaths = "core.deaths";
+        public const string SummonDamageTaken = "core.summon.damage.taken";
+        public const string SummonDeaths = "core.summon.deaths";
         public const string DamageBlocked = "core.damage.blocked";
         public const string DamagePrevented = "core.damage.prevented";
         public const string DefenseContribution = "core.defense.contribution";
