@@ -1,4 +1,6 @@
 <Project Sdk="Godot.NET.Sdk/4.5.1">
+    <Import Project="local.props" Condition="Exists('local.props')"/>
+
     <PropertyGroup>
         <RootNamespace>STS2RitsuMetrics</RootNamespace>
         <AssemblyName>STS2-RitsuMetrics</AssemblyName>
@@ -10,12 +12,12 @@
         <Copyright>Copyright © 2026 OLC</Copyright>
         <EnableDynamicLoading>true</EnableDynamicLoading>
         <NoWarn>$(NoWarn);CS0436</NoWarn>
-        <Sts2Dir Condition="'$(Sts2Dir)' == ''">E:\SteamLibrary\steamapps\common\Slay the Spire 2</Sts2Dir>
         <Sts2ApiSignatureRoot Condition="'$(Sts2ApiSignatureRoot)' == ''">$(MSBuildProjectDirectory)\..\sts2-api-signatures</Sts2ApiSignatureRoot>
         <Sts2ApiBaseline>0.107.1</Sts2ApiBaseline>
         <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and Exists('$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)\sts2.dll')">$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)</Sts2DataDir>
-        <Sts2DataDir Condition="'$(Sts2DataDir)' == ''">$(Sts2Dir)\data_sts2_windows_x86_64</Sts2DataDir>
     </PropertyGroup>
+
+    <Import Project="Sts2PathDiscovery.props"/>
 
     <ItemGroup>
         <PackageReference Include="STS2.RitsuLib" Version="0.4.57"/>
