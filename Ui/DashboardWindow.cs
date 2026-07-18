@@ -117,6 +117,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Process(double delta)
         {
+            if (!Visible)
+                return;
             _touchRevealRemaining = Math.Max(0d, _touchRevealRemaining - delta);
             _pointerExitGraceRemaining = Math.Max(0d, _pointerExitGraceRemaining - delta);
             UpdatePointerInside();
@@ -134,9 +136,10 @@ namespace STS2RitsuMetrics.Ui
             var style = ResolveStyle();
             try
             {
+                var data = _host.ResolveDashboardData(_state.Scope);
                 _renderer.Refresh(new(
-                    DashboardHost.ResolveSnapshot(_state.Scope),
-                    DashboardHost.ResolveRun(),
+                    data.Snapshot,
+                    data.Run,
                     _state.Scope,
                     style,
                     _state.Parameters,

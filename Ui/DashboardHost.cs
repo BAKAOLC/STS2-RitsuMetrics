@@ -16,13 +16,19 @@ namespace STS2RitsuMetrics.Ui
         private const int FloatingWindowLayer = 120;
         private const int ControlSurfaceLayer = FloatingWindowLayer + 1;
         private const int BehindCapstoneLayer = -1;
+        private readonly Lock _dashboardDataGate = new();
 
         private readonly Dictionary<string, DashboardWindow> _windows = new(StringComparer.Ordinal);
         private AnalysisCenter? _analysisCenter;
+        private CombatSnapshot? _cachedCombatSnapshot;
+        private RunSnapshot? _cachedRun;
+        private CombatSnapshot? _cachedRunSnapshot;
+        private long _cachedSnapshotRevision = -1;
         private bool _capstoneInUse;
         private DashboardManagerPanel? _manager;
         private DashboardRegistry _registry = null!;
         private int _settingsHash;
+        private long _snapshotRevision;
         private Theme? _typographyTheme;
         private CanvasLayer _windowLayer = null!;
 
@@ -332,20 +338,25 @@ namespace STS2RitsuMetrics.Ui
             });
         }
 
-        internal static CombatSnapshot? ResolveSnapshot(DashboardDataScope scope)
+        internal (CombatSnapshot? Snapshot, RunSnapshot? Run) ResolveDashboardData(DashboardDataScope scope)
         {
-            var run = Main.Repository.GetLiveRun(true);
-            if (scope == DashboardDataScope.CurrentRun)
-                return SnapshotAggregator.Combine(run);
-            var liveCombat = Main.Repository.GetLiveCombat(true);
-            if (liveCombat != null)
-                return liveCombat;
-            return run is { Combats.Count: > 0 } ? run.Combats[^1] : null;
-        }
+            lock (_dashboardDataGate)
+            {
+                if (_cachedSnapshotRevision != _snapshotRevision)
+                {
+                    _cachedRun = Main.Repository.GetLiveRun(true);
+                    _cachedCombatSnapshot = _cachedRun is { Combats.Count: > 0 }
+                        ? _cachedRun.Combats[^1]
+                        : Main.Repository.GetLiveCombat(true);
+                    _cachedRunSnapshot = null;
+                    _cachedSnapshotRevision = _snapshotRevision;
+                }
 
-        internal static RunSnapshot? ResolveRun()
-        {
-            return Main.Repository.GetLiveRun(true);
+                if (scope == DashboardDataScope.CurrentRun)
+                    _cachedRunSnapshot ??= SnapshotAggregator.Combine(_cachedRun);
+                return (scope == DashboardDataScope.CurrentRun ? _cachedRunSnapshot : _cachedCombatSnapshot,
+                    _cachedRun);
+            }
         }
 
         internal void RestoreDefaultLayout()
@@ -466,6 +477,11 @@ namespace STS2RitsuMetrics.Ui
 
         private void MarkAllDirty()
         {
+            lock (_dashboardDataGate)
+            {
+                _snapshotRevision++;
+            }
+
             UpdateVisibility();
             foreach (var window in _windows.Values)
                 window.MarkDirty();
