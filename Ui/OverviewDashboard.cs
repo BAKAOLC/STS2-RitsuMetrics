@@ -179,6 +179,7 @@ namespace STS2RitsuMetrics.Ui
                     var amount = Label(Format(value(metricId)), style, false,
                         total ? style.FontSize + 1 : style.FontSize);
                     amount.HorizontalAlignment = HorizontalAlignment.Right;
+                    DashboardTooltip.SetValue(amount, $"{name} · {MetricName(metricId)}", value(metricId));
                     if (total)
                         amount.Modulate = ColorOf(Accent(style, definition.AccentIndex));
                     table.AddChild(amount);
@@ -395,6 +396,7 @@ namespace STS2RitsuMetrics.Ui
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                 SizeFlagsVertical = Control.SizeFlags.ExpandFill,
             };
+            DashboardTooltip.SetValue(content, ModLocalization.Get(localizationKey, fallback), value);
             content.AddThemeConstantOverride("separation", -2);
             var name = TruncatedLabel(ModLocalization.Get(localizationKey, fallback), style, true,
                 Math.Max(10, style.FontSize - (emphasized ? 1 : 2)));

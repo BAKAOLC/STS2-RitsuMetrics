@@ -19,7 +19,7 @@ namespace STS2RitsuMetrics.Ui
 
         private readonly Dictionary<string, string> _parameters = new(StringComparer.Ordinal)
         {
-            ["metric_id"] = MetricIds.DamageDealt,
+            ["metric_id"] = MetricIds.DamageContribution,
         };
 
         private string? _activeRunId;
@@ -169,6 +169,8 @@ namespace STS2RitsuMetrics.Ui
             {
                 BuiltInDashboardIds.Overview,
                 BuiltInDashboardIds.PlayerPerformance,
+                BuiltInDashboardIds.DamageContribution,
+                BuiltInDashboardIds.DefenseContribution,
                 BuiltInDashboardIds.Meter,
                 BuiltInDashboardIds.SourceAnalysis,
                 BuiltInDashboardIds.ReceivedDamage,
@@ -193,7 +195,7 @@ namespace STS2RitsuMetrics.Ui
                 _dashboard.AddItem(ModLocalization.Get(definition.TitleLocalizationKey, definition.FallbackTitle));
             Select(_dashboard, _dashboardIds, selectedDashboard);
 
-            var selectedMetric = Selected(_metric, _metricIds) ?? MetricIds.DamageDealt;
+            var selectedMetric = Selected(_metric, _metricIds) ?? MetricIds.DamageContribution;
             var metrics = Main.Api.MetricDefinitions.OrderBy(metric => metric.Category)
                 .ThenBy(metric => metric.Id, StringComparer.Ordinal).ToArray();
             _metricIds = metrics.Select(metric => metric.Id).ToArray();
@@ -653,7 +655,7 @@ namespace STS2RitsuMetrics.Ui
             var run = SelectedRun();
             var snapshot = SelectedSnapshot();
             var style = _registry.ResolveStyle("ritsumetrics.compact");
-            _parameters["metric_id"] = Selected(_metric, _metricIds) ?? MetricIds.DamageDealt;
+            _parameters["metric_id"] = Selected(_metric, _metricIds) ?? MetricIds.DamageContribution;
             try
             {
                 _renderer.Refresh(new(

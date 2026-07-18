@@ -5,13 +5,17 @@ namespace STS2RitsuMetrics.Api
     public static class MetricIds
     {
         public const string DamageDealt = "core.damage.dealt";
+        public const string DamageContribution = "core.damage.contribution";
         public const string DamageTaken = "core.damage.taken";
         public const string DamageBlocked = "core.damage.blocked";
+        public const string DamagePrevented = "core.damage.prevented";
+        public const string DefenseContribution = "core.defense.contribution";
         public const string Overkill = "core.damage.overkill";
         public const string DamageAmplified = "core.damage.amplified";
         public const string DamageMitigated = "core.damage.mitigated";
         public const string BlockGained = "core.block.gained";
         public const string HealingReceived = "core.healing.received";
+        public const string HealingContribution = "core.healing.contribution";
         public const string CardsPlayed = "core.card.played";
         public const string CardsDrawn = "core.card.drawn";
         public const string CardsDiscarded = "core.card.discarded";

@@ -88,20 +88,35 @@ namespace STS2RitsuMetrics.Data
                 return;
             ModifySettings(settings =>
             {
-                settings.DashboardWindows.Clear();
-                settings.DashboardWindows.Add(new()
+                if (settings.DataVersion < 3)
                 {
-                    DashboardId = BuiltInDashboardIds.Meter,
-                    PositionY = 92f,
-                    Width = 400f,
-                    Height = 360f,
-                    IsCollapsed = settings.StartCollapsed,
-                    IsLocked = settings.LockWindow,
-                    Parameters = new(StringComparer.Ordinal)
+                    settings.DashboardWindows.Clear();
+                    settings.DashboardWindows.Add(new()
                     {
-                        ["metric_id"] = settings.DefaultMetricId,
-                    },
-                });
+                        DashboardId = BuiltInDashboardIds.Meter,
+                        PositionY = 92f,
+                        Width = 400f,
+                        Height = 360f,
+                        IsCollapsed = settings.StartCollapsed,
+                        IsLocked = settings.LockWindow,
+                        Parameters = new(StringComparer.Ordinal)
+                        {
+                            [DashboardParameterIds.MetricId] = settings.DefaultMetricId,
+                        },
+                    });
+                }
+
+                if (settings.DefaultMetricId == MetricIds.DamageDealt)
+                    settings.DefaultMetricId = MetricIds.DamageContribution;
+                foreach (var window in settings.DashboardWindows.Where(window =>
+                             window.DashboardId == BuiltInDashboardIds.Meter &&
+                             window.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId) ==
+                             MetricIds.DamageDealt))
+                {
+                    window.DashboardId = BuiltInDashboardIds.DamageContribution;
+                    window.Parameters.Remove(DashboardParameterIds.MetricId);
+                }
+
                 settings.DataVersion = ModSettings.CurrentDataVersion;
             });
         }

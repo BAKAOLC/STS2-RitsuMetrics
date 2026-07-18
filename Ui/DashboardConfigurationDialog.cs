@@ -203,7 +203,7 @@ namespace STS2RitsuMetrics.Ui
             _metric.Clear();
             foreach (var metric in metrics)
                 _metric.AddItem(ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName));
-            Select(_metric, _metricIds, selectedMetric ?? MetricIds.DamageDealt);
+            Select(_metric, _metricIds, selectedMetric ?? MetricIds.DamageContribution);
             UpdateSelectedDashboard();
         }
 
@@ -213,8 +213,8 @@ namespace STS2RitsuMetrics.Ui
             _editingParameters.Clear();
             _editingStyleId = null;
             _dashboard.Disabled = false;
-            Select(_dashboard, _dashboardIds, BuiltInDashboardIds.Meter);
-            Select(_metric, _metricIds, MetricIds.DamageDealt);
+            Select(_dashboard, _dashboardIds, BuiltInDashboardIds.DamageContribution);
+            Select(_metric, _metricIds, MetricIds.DamageContribution);
             _scope.Select(0);
             Select(_fontSize, _fontSizes, "15");
             Select(_layout, _layoutValues,
@@ -293,7 +293,7 @@ namespace STS2RitsuMetrics.Ui
             var dashboardId = Selected(_dashboard, _dashboardIds);
             if (dashboardId == null)
                 return;
-            var metricId = Selected(_metric, _metricIds) ?? MetricIds.DamageDealt;
+            var metricId = Selected(_metric, _metricIds) ?? MetricIds.DamageContribution;
             var scope = _scope.Selected == 1 ? DashboardDataScope.CurrentRun : DashboardDataScope.CurrentCombat;
             var definition = _registry.Definitions.FirstOrDefault(item => item.Id == dashboardId);
             var styleId = _editingStyleId ?? definition?.DefaultStyleId ?? "ritsumetrics.compact";
@@ -329,8 +329,10 @@ namespace STS2RitsuMetrics.Ui
                 ? string.Empty
                 : ModLocalization.Get(definition.DescriptionLocalizationKey, definition.FallbackDescription);
             var needsMetric = dashboardId == BuiltInDashboardIds.Meter;
+            var supportsSummons = dashboardId is BuiltInDashboardIds.Meter or
+                BuiltInDashboardIds.DamageContribution or BuiltInDashboardIds.DefenseContribution;
             _metricField.Visible = needsMetric;
-            _summonField.Visible = needsMetric;
+            _summonField.Visible = supportsSummons;
         }
 
         private void OnScrimInput(InputEvent input)
@@ -455,7 +457,7 @@ namespace STS2RitsuMetrics.Ui
 
         private void RestoreDefaults()
         {
-            Select(_metric, _metricIds, MetricIds.DamageDealt);
+            Select(_metric, _metricIds, MetricIds.DamageContribution);
             _scope.Select(0);
             var dashboardId = Selected(_dashboard, _dashboardIds);
             var definition = _registry.Definitions.FirstOrDefault(item => item.Id == dashboardId);

@@ -32,10 +32,16 @@ namespace STS2RitsuMetrics.Core
         {
             Register(new(MetricIds.DamageDealt, "metric.damageDealt", "Damage dealt", MetricValueKind.Amount,
                 "damage"));
+            Register(new(MetricIds.DamageContribution, "metric.damageContribution", "Damage contribution",
+                MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.DamageTaken, "metric.damageTaken", "Damage taken", MetricValueKind.Amount, "damage",
                 false));
             Register(new(MetricIds.DamageBlocked, "metric.damageBlocked", "Damage blocked", MetricValueKind.Amount,
                 "damage"));
+            Register(new(MetricIds.DamagePrevented, "metric.damagePrevented", "Damage prevented",
+                MetricValueKind.Amount, "contribution"));
+            Register(new(MetricIds.DefenseContribution, "metric.defenseContribution", "Defense contribution",
+                MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.Overkill, "metric.overkill", "Overkill", MetricValueKind.Amount, "damage"));
             Register(new(MetricIds.DamageAmplified, "metric.damageAmplified", "Damage amplified",
                 MetricValueKind.Amount, "damage"));
@@ -45,6 +51,8 @@ namespace STS2RitsuMetrics.Core
                 new(MetricIds.BlockGained, "metric.blockGained", "Block gained", MetricValueKind.Amount, "defense"));
             Register(new(MetricIds.HealingReceived, "metric.healingReceived", "Healing received",
                 MetricValueKind.Amount, "defense"));
+            Register(new(MetricIds.HealingContribution, "metric.healingContribution", "Healing contribution",
+                MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.CardsPlayed, "metric.cardsPlayed", "Cards played", MetricValueKind.Count, "cards"));
             Register(new(MetricIds.CardsDrawn, "metric.cardsDrawn", "Cards drawn", MetricValueKind.Count, "cards"));
             Register(new(MetricIds.CardsDiscarded, "metric.cardsDiscarded", "Cards discarded", MetricValueKind.Count,

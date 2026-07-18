@@ -613,6 +613,7 @@ namespace STS2RitsuMetrics.Ui
                 value.Modulate = ColorOf(cell.Color);
                 box.AddChild(value);
                 box.AddChild(TruncatedLabel(cell.Caption, style, true, Math.Max(9, style.FontSize - 2)));
+                DashboardTooltip.SetValue(box, cell.Caption, cell.Value, detail: cell.ValueText);
                 grid.AddChild(box);
             }
 
@@ -666,6 +667,7 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style)
         {
             var metric = new VBoxContainer { CustomMinimumSize = new(82f, 0f) };
+            DashboardTooltip.SetValue(metric, caption, value);
             metric.AddThemeConstantOverride("separation", -3);
             var amount = Label(Format(value), style, false, style.FontSize + 1);
             amount.Modulate = ColorOf(color);

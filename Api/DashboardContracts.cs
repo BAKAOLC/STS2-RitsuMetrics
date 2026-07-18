@@ -14,6 +14,8 @@ namespace STS2RitsuMetrics.Api
     {
         public const string Overview = "ritsumetrics.overview";
         public const string Meter = "ritsumetrics.meter";
+        public const string DamageContribution = "ritsumetrics.damage-contribution";
+        public const string DefenseContribution = "ritsumetrics.defense-contribution";
         public const string CardLog = "ritsumetrics.card-log";
         public const string ReceivedDamage = "ritsumetrics.received-damage";
         public const string Timeline = "ritsumetrics.timeline";

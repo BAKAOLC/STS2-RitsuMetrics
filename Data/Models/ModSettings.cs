@@ -7,7 +7,7 @@ namespace STS2RitsuMetrics.Data.Models
 {
     public sealed class ModSettings
     {
-        public const int CurrentDataVersion = 3;
+        public const int CurrentDataVersion = 4;
         public const float MinimumScale = 0.65f;
         public const float MaximumScale = 1.75f;
         public const float MinimumOpacity = 0.35f;
@@ -35,19 +35,18 @@ namespace STS2RitsuMetrics.Data.Models
         public int HistoryCombatLimit { get; set; } = 200;
         public int EventLimitPerCombat { get; set; } = 5000;
         public int TimelineLimitPerCombat { get; set; } = 20000;
-        public string DefaultMetricId { get; set; } = MetricIds.DamageDealt;
+        public string DefaultMetricId { get; set; } = MetricIds.DamageContribution;
 
         public List<DashboardWindowSettings> DashboardWindows { get; set; } =
         [
             new()
             {
-                DashboardId = BuiltInDashboardIds.Meter,
+                DashboardId = BuiltInDashboardIds.DamageContribution,
                 PositionY = 92f,
                 Width = 400f,
                 Height = 360f,
                 Parameters = new(StringComparer.Ordinal)
                 {
-                    ["metric_id"] = MetricIds.DamageDealt,
                     [DashboardParameterIds.Layout] = DashboardParameterValues.SingleLine,
                 },
             },

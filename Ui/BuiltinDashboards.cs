@@ -59,6 +59,12 @@ namespace STS2RitsuMetrics.Ui
                 () => new OverviewRenderer());
             Register(registry, BuiltInDashboardIds.Meter, "dashboard.meter", "Metric meter",
                 "Per-player meter with source breakdown", 400f, 360f, () => new MetricMeterRenderer());
+            Register(registry, BuiltInDashboardIds.DamageContribution, "dashboard.damageContribution",
+                "Damage dealt", "RDPS attribution of realized damage to direct and enabling contributors", 400f,
+                360f, () => new MetricMeterRenderer(MetricIds.DamageContribution));
+            Register(registry, BuiltInDashboardIds.DefenseContribution, "dashboard.defenseContribution",
+                "Defense contribution", "Effective mitigation, consumed block and healing by contributor", 400f,
+                360f, () => new MetricMeterRenderer(MetricIds.DefenseContribution));
             Register(registry, BuiltInDashboardIds.CardLog, "dashboard.cardLog", "Card and effect log",
                 "Cards, damage, block, powers and executions", 620f, 620f, () => new CardLogRenderer());
             Register(registry, BuiltInDashboardIds.ReceivedDamage, "dashboard.received", "Received damage",
@@ -245,6 +251,7 @@ namespace STS2RitsuMetrics.Ui
             label.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
             label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
             label.ClipText = true;
+            label.TooltipText = text;
             return label;
         }
 
@@ -332,7 +339,7 @@ namespace STS2RitsuMetrics.Ui
                 MinValue = 0d,
                 MaxValue = Math.Max(1d, (double)maximum),
                 Value = (double)Math.Max(0m, value),
-                MouseFilter = Control.MouseFilterEnum.Ignore,
+                MouseFilter = Control.MouseFilterEnum.Pass,
             };
             bar.AddThemeStyleboxOverride("fill", new StyleBoxFlat
             {
@@ -360,6 +367,7 @@ namespace STS2RitsuMetrics.Ui
             label.OffsetRight = -8f;
             label.VerticalAlignment = VerticalAlignment.Center;
             bar.AddChild(label);
+            DashboardTooltip.SetValue(bar, text, value, maximum);
             return bar;
         }
 
@@ -390,6 +398,7 @@ namespace STS2RitsuMetrics.Ui
             amount.HorizontalAlignment = HorizontalAlignment.Right;
             labels.AddChild(amount);
             bar.AddChild(labels);
+            DashboardTooltip.SetValue(bar, labelText, value, maximum, valueText);
             return bar;
         }
 
@@ -470,6 +479,7 @@ namespace STS2RitsuMetrics.Ui
                 return SingleLinePlayerHeader(player, rank, value, total, accent, style);
 
             var row = new HBoxContainer { CustomMinimumSize = new(0, 48) };
+            DashboardTooltip.SetValue(row, player.DisplayName, value, total, player.CharacterId);
             row.AddThemeConstantOverride("separation", 7);
             if (rank > 0)
             {
@@ -515,6 +525,7 @@ namespace STS2RitsuMetrics.Ui
         {
             var rowHeight = Math.Max(28, style.RowHeight);
             var row = new HBoxContainer { CustomMinimumSize = new(0, rowHeight) };
+            DashboardTooltip.SetValue(row, player.DisplayName, value, total, player.CharacterId);
             row.AddThemeConstantOverride("separation", 4);
             if (rank > 0)
             {
@@ -563,6 +574,7 @@ namespace STS2RitsuMetrics.Ui
                     showPercentages);
 
             var root = new VBoxContainer { CustomMinimumSize = new(0, 42) };
+            DashboardTooltip.SetValue(root, player.DisplayName, value, total, player.CharacterId);
             root.AddThemeConstantOverride("separation", 3);
             var header = new HBoxContainer { CustomMinimumSize = new(0, 31) };
             header.AddThemeConstantOverride("separation", 6);
@@ -638,6 +650,7 @@ namespace STS2RitsuMetrics.Ui
         {
             var rowHeight = Math.Max(28, style.RowHeight);
             var row = new HBoxContainer { CustomMinimumSize = new(0, rowHeight) };
+            DashboardTooltip.SetValue(row, player.DisplayName, value, total, player.CharacterId);
             row.AddThemeConstantOverride("separation", 4);
 
             var rankLabel = Label(rank.ToString(CultureInfo.CurrentCulture), style, true, style.FontSize);
@@ -701,6 +714,8 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style)
         {
             var root = new VBoxContainer();
+            DashboardTooltip.SetValue(root, text, first + second,
+                detail: $"{Format(first)} + {Format(second)}");
             root.AddThemeConstantOverride("separation", 2);
             root.AddChild(WrappedLabel(text, style));
             var segments = new HBoxContainer { CustomMinimumSize = new(0, Math.Max(10, style.RowHeight / 2)) };
@@ -755,7 +770,7 @@ namespace STS2RitsuMetrics.Ui
         }
     }
 
-    internal sealed class MetricMeterRenderer : DashboardRendererBase
+    internal sealed class MetricMeterRenderer(string? fixedMetricId = null) : DashboardRendererBase
     {
         private DashboardRenderContext? _lastContext;
         private string? _selectedPlayerKey;
@@ -763,8 +778,8 @@ namespace STS2RitsuMetrics.Ui
         protected override void Render(DashboardRenderContext context)
         {
             _lastContext = context;
-            var metricId = context.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId,
-                MetricIds.DamageDealt);
+            var metricId = fixedMetricId ?? context.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId,
+                MetricIds.DamageContribution);
             var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metricId);
             Title = definition == null
                 ? metricId
@@ -811,7 +826,14 @@ namespace STS2RitsuMetrics.Ui
                 var content = PlayerMeterRow(player, index + 1, value, total, maximum, accent, context.Style,
                     context.ShowPercentages, singleLine);
                 var row = InteractiveRow(content, context.Style, accent, singleLine);
-                row.TooltipText = ModLocalization.Get("dashboard.openPlayerDetail", "Open source details");
+                DashboardTooltip.Set(row,
+                [
+                    player.DisplayName,
+                    $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
+                    $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
+                    (total > 0m ? $"{value / total:P1}" : "—"),
+                    ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
+                ]);
                 row.GuiInput += input =>
                 {
                     if (input is not InputEventMouseButton
@@ -947,9 +969,11 @@ namespace STS2RitsuMetrics.Ui
             string metricId,
             bool splitSummons)
         {
+            var useLegacyFallback = metricId is MetricIds.DamageContribution or MetricIds.DefenseContribution &&
+                                    snapshot.Players.All(player => !player.Totals.ContainsKey(metricId));
             if (!splitSummons)
                 return snapshot.Players
-                    .Select(player => new MeterEntry(player, Metric(player, metricId)))
+                    .Select(player => ResolveMeterEntry(player, metricId, useLegacyFallback))
                     .OrderByDescending(item => item.Value)
                     .ToArray();
 
@@ -968,7 +992,7 @@ namespace STS2RitsuMetrics.Ui
                     .ToArray();
                 if (summonGroups.Length == 0)
                 {
-                    entries.Add(new(player, Metric(player, metricId)));
+                    entries.Add(ResolveMeterEntry(player, metricId, useLegacyFallback));
                     continue;
                 }
 
@@ -1002,8 +1026,50 @@ namespace STS2RitsuMetrics.Ui
 
         private static bool IsSummonObservation(MetricObservation observation)
         {
-            return observation.Tags.GetValueOrDefault(ObservationTagIds.ActorKind) ==
-                   nameof(AnalyticsEntityKind.Summon);
+            if (observation.Tags.GetValueOrDefault(ObservationTagIds.ActorKind) !=
+                nameof(AnalyticsEntityKind.Summon))
+                return false;
+            if (observation.Tags.GetValueOrDefault(ObservationTagIds.ActorOwnerKey) != observation.Subject.Key)
+                return false;
+            var component = observation.Tags.GetValueOrDefault(ObservationTagIds.ContributionComponent);
+            return string.IsNullOrEmpty(component) || component is ContributionComponentIds.BaseDamage or
+                ContributionComponentIds.Execution;
+        }
+
+        private static MeterEntry ResolveMeterEntry(
+            PlayerMetricSnapshot player,
+            string metricId,
+            bool useLegacyFallback)
+        {
+            if (!useLegacyFallback)
+                return new(player, Metric(player, metricId));
+            var sourceMetricIds = metricId == MetricIds.DamageContribution
+                ? new[] { MetricIds.DamageDealt }
+                : new[] { MetricIds.DamageMitigated, MetricIds.DamageBlocked, MetricIds.HealingReceived };
+            var value = sourceMetricIds.Sum(sourceMetricId => Metric(player, sourceMetricId));
+            var sources = sourceMetricIds.SelectMany(sourceMetricId =>
+                    player.Sources.GetValueOrDefault(sourceMetricId) ?? [])
+                .GroupBy(source => source.SourceKey, StringComparer.Ordinal)
+                .Select(group => group.First() with
+                {
+                    Value = group.Sum(source => source.Value),
+                    Occurrences = group.Sum(source => source.Occurrences),
+                })
+                .OrderByDescending(source => source.Value)
+                .ToArray();
+            var snapshot = player with
+            {
+                Totals = new Dictionary<string, decimal>(player.Totals, StringComparer.Ordinal)
+                {
+                    [metricId] = value,
+                },
+                Sources = new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(player.Sources,
+                    StringComparer.Ordinal)
+                {
+                    [metricId] = sources,
+                },
+            };
+            return new(snapshot, value);
         }
 
         private static PlayerMetricSnapshot CreateEntrySnapshot(
@@ -1037,7 +1103,10 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
-                MetricIds.DamageDealt or MetricIds.DamageTaken or MetricIds.Overkill => style.NegativeColor,
+                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.DamageTaken or
+                    MetricIds.Overkill => style.NegativeColor,
+                MetricIds.DamagePrevented or MetricIds.DefenseContribution or MetricIds.HealingContribution =>
+                    style.PositiveColor,
                 MetricIds.BlockGained or MetricIds.DamageBlocked or MetricIds.HealingReceived =>
                     style.PositiveColor,
                 _ => Accent(style, 1),

@@ -82,6 +82,18 @@ namespace STS2RitsuMetrics.Api
         public const string ActorModelId = "ritsumetrics.actor.model_id";
         public const string ActorDisplayName = "ritsumetrics.actor.display_name";
         public const string ActorOwnerKey = "ritsumetrics.actor.owner_key";
+        public const string ContributionComponent = "ritsumetrics.contribution.component";
+        public const string AttributionConfidence = "ritsumetrics.attribution.confidence";
+    }
+
+    public static class ContributionComponentIds
+    {
+        public const string BaseDamage = "base_damage";
+        public const string DamageAmplification = "damage_amplification";
+        public const string DamageMitigation = "damage_mitigation";
+        public const string Block = "block";
+        public const string Healing = "healing";
+        public const string Execution = "execution";
     }
 
     public sealed record SourceMetricSnapshot(

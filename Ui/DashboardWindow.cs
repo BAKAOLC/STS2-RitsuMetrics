@@ -594,7 +594,9 @@ namespace STS2RitsuMetrics.Ui
         {
             return _state.DashboardId switch
             {
-                BuiltInDashboardIds.Meter or BuiltInDashboardIds.DamageBreakdown => style.NegativeColor,
+                BuiltInDashboardIds.Meter or BuiltInDashboardIds.DamageContribution or
+                    BuiltInDashboardIds.DamageBreakdown => style.NegativeColor,
+                BuiltInDashboardIds.DefenseContribution => style.PositiveColor,
                 BuiltInDashboardIds.ReceivedDamage => style.WarningColor,
                 BuiltInDashboardIds.Timeline => DashboardRendererBase.AccentAt(style, 1),
                 _ => DashboardRendererBase.AccentAt(style, 3),
@@ -660,6 +662,8 @@ namespace STS2RitsuMetrics.Ui
                 if (definition.Id == BuiltInDashboardIds.Meter)
                 {
                     selections.AddRange(Main.Api.MetricDefinitions
+                        .Where(metric => metric.Id is not
+                            (MetricIds.DamageContribution or MetricIds.DefenseContribution))
                         .OrderBy(metric => metric.Category, StringComparer.Ordinal)
                         .ThenBy(metric => ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName),
                             StringComparer.CurrentCulture)
@@ -722,8 +726,9 @@ namespace STS2RitsuMetrics.Ui
             if (selection.DashboardId != BuiltInDashboardIds.Meter)
                 return true;
             var selectedMetric = selection.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId,
-                MetricIds.DamageDealt);
-            return _state.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId, MetricIds.DamageDealt) ==
+                MetricIds.DamageContribution);
+            return _state.Parameters.GetValueOrDefault(DashboardParameterIds.MetricId,
+                       MetricIds.DamageContribution) ==
                    selectedMetric;
         }
 
@@ -732,19 +737,21 @@ namespace STS2RitsuMetrics.Ui
             return dashboardId switch
             {
                 BuiltInDashboardIds.Overview => 0,
-                BuiltInDashboardIds.Meter => 1,
-                BuiltInDashboardIds.DamageBreakdown => 2,
-                BuiltInDashboardIds.PlayerPerformance => 3,
-                BuiltInDashboardIds.SourceAnalysis => 4,
-                BuiltInDashboardIds.ContributionAnalysis => 5,
-                BuiltInDashboardIds.DefenseResources => 6,
-                BuiltInDashboardIds.CardsAndEffects => 7,
-                BuiltInDashboardIds.TurnAnalysis => 8,
-                BuiltInDashboardIds.Timeline => 9,
-                BuiltInDashboardIds.CardLog => 10,
-                BuiltInDashboardIds.ReceivedDamage => 11,
-                BuiltInDashboardIds.RunTrends => 12,
-                BuiltInDashboardIds.CombatRecords => 13,
+                BuiltInDashboardIds.DamageContribution => 1,
+                BuiltInDashboardIds.DefenseContribution => 2,
+                BuiltInDashboardIds.Meter => 3,
+                BuiltInDashboardIds.DamageBreakdown => 4,
+                BuiltInDashboardIds.PlayerPerformance => 5,
+                BuiltInDashboardIds.SourceAnalysis => 6,
+                BuiltInDashboardIds.ContributionAnalysis => 7,
+                BuiltInDashboardIds.DefenseResources => 8,
+                BuiltInDashboardIds.CardsAndEffects => 9,
+                BuiltInDashboardIds.TurnAnalysis => 10,
+                BuiltInDashboardIds.Timeline => 11,
+                BuiltInDashboardIds.CardLog => 12,
+                BuiltInDashboardIds.ReceivedDamage => 13,
+                BuiltInDashboardIds.RunTrends => 14,
+                BuiltInDashboardIds.CombatRecords => 15,
                 _ => 100,
             };
         }

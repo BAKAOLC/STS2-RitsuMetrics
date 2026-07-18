@@ -65,7 +65,7 @@ namespace STS2RitsuMetrics.Ui
             LoadWindows();
             DrainOpenRequests();
             if (_windows.Count == 0 && ModData.Settings.OverlayEnabled)
-                OpenWindow(BuiltInDashboardIds.Meter, new());
+                OpenWindow(BuiltInDashboardIds.DamageContribution, new());
             _manager = new() { Visible = false, Theme = _typographyTheme };
             _manager.Initialize(this, _registry);
             AddChild(_manager);
@@ -111,7 +111,7 @@ namespace STS2RitsuMetrics.Ui
             var enabled = !ModData.Settings.OverlayEnabled;
             ModData.ModifySettings(settings => settings.OverlayEnabled = enabled);
             if (enabled && _windows.Count == 0)
-                OpenWindow(BuiltInDashboardIds.Meter, new());
+                OpenWindow(BuiltInDashboardIds.DamageContribution, new());
             ApplySettings();
             GetViewport().SetInputAsHandled();
         }
@@ -363,14 +363,10 @@ namespace STS2RitsuMetrics.Ui
                 settings.OverlayEnabled = true;
                 settings.DashboardWindows.Clear();
             });
-            OpenWindow(BuiltInDashboardIds.Meter, new()
+            OpenWindow(BuiltInDashboardIds.DamageContribution, new()
             {
                 Width = 400f,
                 Height = 360f,
-                Parameters = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["metric_id"] = MetricIds.DamageDealt,
-                },
             });
             ApplySettings(true);
         }
