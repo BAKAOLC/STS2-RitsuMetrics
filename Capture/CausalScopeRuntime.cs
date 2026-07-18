@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
@@ -24,6 +25,7 @@ namespace STS2RitsuMetrics.Capture
     internal static class CaptureBridge
     {
         internal static Action<EffectScopeCapture>? EffectMaterialized { get; set; }
+        internal static Action<DamageRequestCapture, IReadOnlyList<DamageResult>>? DamageRequestCompleted { get; set; }
         internal static Func<string?>? FallbackParentResolver { get; set; }
         internal static Func<bool>? IsCombatActive { get; set; }
 
@@ -87,7 +89,8 @@ namespace STS2RitsuMetrics.Capture
             if (frame == null)
                 return null;
             Materialize(frame, fallback);
-            return new(frame.EventId, ParentId(frame, fallback), frame.Model, frame.Source, frame.ActionId);
+            return new(frame.EventId, ParentId(frame, fallback), frame.Model, frame.Source,
+                frame.ActionId);
         }
 
         private static void Materialize(ScopeFrame frame, string? fallback)

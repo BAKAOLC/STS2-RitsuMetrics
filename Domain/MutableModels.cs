@@ -325,7 +325,8 @@ namespace STS2RitsuMetrics.Domain
 
         public static MutableSourceMetric Restore(SourceMetricSnapshot snapshot)
         {
-            return new(new(snapshot.SourceKey, snapshot.SourceKind, snapshot.ModelId, snapshot.DisplayName))
+            return new(new(snapshot.SourceKey, snapshot.SourceKind, snapshot.ModelId,
+                snapshot.DisplayName))
             {
                 Value = snapshot.Value,
                 Occurrences = snapshot.Occurrences,
@@ -334,7 +335,8 @@ namespace STS2RitsuMetrics.Domain
 
         public SourceMetricSnapshot Snapshot()
         {
-            return new(source.Key, source.Kind, source.ModelId, source.DisplayName, Value, Occurrences);
+            return new(source.Key, source.Kind, source.ModelId, source.DisplayName, Value,
+                Occurrences);
         }
     }
 

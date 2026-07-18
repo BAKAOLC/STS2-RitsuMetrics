@@ -30,50 +30,72 @@ namespace STS2RitsuMetrics.Core
 
         internal void RegisterBuiltIns()
         {
-            Register(new(MetricIds.DamageDealt, "metric.damageDealt", "Damage dealt", MetricValueKind.Amount,
+            Register(new(MetricIds.DamageDealt, "metric.damageDealt", "Damage dealt",
+                MetricValueKind.Amount,
                 "damage"));
             Register(new(MetricIds.DamageContribution, "metric.damageContribution", "Damage contribution",
                 MetricValueKind.Amount, "contribution"));
-            Register(new(MetricIds.DamageTaken, "metric.damageTaken", "Damage taken", MetricValueKind.Amount, "damage",
+            Register(new(MetricIds.EffectiveHpDamageDealt, "metric.effectiveHpDamageDealt",
+                "Effective HP reduction (AD)", MetricValueKind.Amount, "damage"));
+            Register(new(MetricIds.EffectiveHpDamageContribution, "metric.effectiveHpDamageContribution",
+                "Effective HP reduction (RD)", MetricValueKind.Amount, "contribution"));
+            Register(new(MetricIds.DamageTaken, "metric.damageTaken", "Damage taken",
+                MetricValueKind.Amount, "damage",
                 false));
-            Register(new(MetricIds.DamageBlocked, "metric.damageBlocked", "Damage blocked", MetricValueKind.Amount,
+            Register(new(MetricIds.DamageBlocked, "metric.damageBlocked", "Damage blocked",
+                MetricValueKind.Amount,
                 "damage"));
             Register(new(MetricIds.DamagePrevented, "metric.damagePrevented", "Damage prevented",
                 MetricValueKind.Amount, "contribution"));
-            Register(new(MetricIds.DefenseContribution, "metric.defenseContribution", "Defense contribution",
+            Register(new(MetricIds.DefenseContribution, "metric.defenseContribution",
+                "Defense contribution",
                 MetricValueKind.Amount, "contribution"));
-            Register(new(MetricIds.Overkill, "metric.overkill", "Overkill", MetricValueKind.Amount, "damage"));
+            Register(new(MetricIds.Overkill, "metric.overkill", "Overkill", MetricValueKind.Amount,
+                "damage"));
             Register(new(MetricIds.DamageAmplified, "metric.damageAmplified", "Damage amplified",
                 MetricValueKind.Amount, "damage"));
             Register(new(MetricIds.DamageMitigated, "metric.damageMitigated", "Damage mitigated",
                 MetricValueKind.Amount, "damage"));
             Register(
-                new(MetricIds.BlockGained, "metric.blockGained", "Block gained", MetricValueKind.Amount, "defense"));
+                new(MetricIds.BlockGained, "metric.blockGained", "Block gained", MetricValueKind.Amount,
+                    "defense"));
             Register(new(MetricIds.HealingReceived, "metric.healingReceived", "Healing received",
                 MetricValueKind.Amount, "defense"));
-            Register(new(MetricIds.HealingContribution, "metric.healingContribution", "Healing contribution",
+            Register(new(MetricIds.HealingContribution, "metric.healingContribution",
+                "Healing contribution",
                 MetricValueKind.Amount, "contribution"));
-            Register(new(MetricIds.CardsPlayed, "metric.cardsPlayed", "Cards played", MetricValueKind.Count, "cards"));
-            Register(new(MetricIds.CardsDrawn, "metric.cardsDrawn", "Cards drawn", MetricValueKind.Count, "cards"));
-            Register(new(MetricIds.CardsDiscarded, "metric.cardsDiscarded", "Cards discarded", MetricValueKind.Count,
+            Register(new(MetricIds.CardsPlayed, "metric.cardsPlayed", "Cards played",
+                MetricValueKind.Count, "cards"));
+            Register(new(MetricIds.CardsDrawn, "metric.cardsDrawn", "Cards drawn", MetricValueKind.Count,
                 "cards"));
-            Register(new(MetricIds.CardsExhausted, "metric.cardsExhausted", "Cards exhausted", MetricValueKind.Count,
+            Register(new(MetricIds.CardsDiscarded, "metric.cardsDiscarded", "Cards discarded",
+                MetricValueKind.Count,
                 "cards"));
-            Register(new(MetricIds.EnergySpent, "metric.energySpent", "Energy spent", MetricValueKind.Amount,
+            Register(new(MetricIds.CardsExhausted, "metric.cardsExhausted", "Cards exhausted",
+                MetricValueKind.Count,
+                "cards"));
+            Register(new(MetricIds.EnergySpent, "metric.energySpent", "Energy spent",
+                MetricValueKind.Amount,
                 "resources"));
-            Register(new(MetricIds.PotionsUsed, "metric.potionsUsed", "Potions used", MetricValueKind.Count,
+            Register(new(MetricIds.PotionsUsed, "metric.potionsUsed", "Potions used",
+                MetricValueKind.Count,
                 "resources"));
-            Register(new(MetricIds.PowersApplied, "metric.powersApplied", "Powers applied", MetricValueKind.Amount,
+            Register(new(MetricIds.PowersApplied, "metric.powersApplied", "Powers applied",
+                MetricValueKind.Amount,
                 "effects"));
-            Register(new(MetricIds.DebuffsApplied, "metric.debuffsApplied", "Debuffs applied", MetricValueKind.Amount,
+            Register(new(MetricIds.DebuffsApplied, "metric.debuffsApplied", "Debuffs applied",
+                MetricValueKind.Amount,
                 "effects"));
-            Register(new(MetricIds.OrbsChanneled, "metric.orbsChanneled", "Orbs channeled", MetricValueKind.Count,
+            Register(new(MetricIds.OrbsChanneled, "metric.orbsChanneled", "Orbs channeled",
+                MetricValueKind.Count,
                 "resources"));
-            Register(new(MetricIds.StarsGained, "metric.starsGained", "Stars gained", MetricValueKind.Amount,
+            Register(new(MetricIds.StarsGained, "metric.starsGained", "Stars gained",
+                MetricValueKind.Amount,
                 "resources"));
             Register(new(MetricIds.StarsSpent, "metric.starsSpent", "Stars spent", MetricValueKind.Amount,
                 "resources"));
-            Register(new(MetricIds.SummonsCreated, "metric.summonsCreated", "Summons created", MetricValueKind.Amount,
+            Register(new(MetricIds.SummonsCreated, "metric.summonsCreated", "Summons created",
+                MetricValueKind.Amount,
                 "resources"));
         }
 

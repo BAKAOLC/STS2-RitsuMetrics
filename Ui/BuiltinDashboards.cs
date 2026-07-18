@@ -60,8 +60,12 @@ namespace STS2RitsuMetrics.Ui
             Register(registry, BuiltInDashboardIds.Meter, "dashboard.meter", "Metric meter",
                 "Per-player meter with source breakdown", 400f, 360f, () => new MetricMeterRenderer());
             Register(registry, BuiltInDashboardIds.DamageContribution, "dashboard.damageContribution",
-                "Damage dealt", "RDPS attribution of realized damage to direct and enabling contributors", 400f,
+                "Damage dealt (RD)", "RD attribution of damage dealt to HP or Block", 400f,
                 360f, () => new MetricMeterRenderer(MetricIds.DamageContribution));
+            Register(registry, BuiltInDashboardIds.EffectiveHpDamageContribution,
+                "dashboard.effectiveHpDamageContribution", "Effective HP reduction (RD)",
+                "RD attribution of damage that reduced HP", 400f, 360f,
+                () => new MetricMeterRenderer(MetricIds.EffectiveHpDamageContribution));
             Register(registry, BuiltInDashboardIds.DefenseContribution, "dashboard.defenseContribution",
                 "Defense contribution", "Effective mitigation, consumed block and healing by contributor", 400f,
                 360f, () => new MetricMeterRenderer(MetricIds.DefenseContribution));
@@ -138,7 +142,12 @@ namespace STS2RitsuMetrics.Ui
     public abstract class DashboardRendererBase : IDashboardRenderer, IDashboardRendererPresentation,
         IDashboardRendererFooterPresentation
     {
+        private const float FooterSeparation = 8f;
+        private const float MinimumOverflowContextWidth = 48f;
+        private readonly HBoxContainer _footer;
         private readonly Label _footerContext;
+        private string _compactFooterContext = string.Empty;
+        private string _fullFooterContext = string.Empty;
 
         protected DashboardRendererBase()
         {
@@ -157,8 +166,9 @@ namespace STS2RitsuMetrics.Ui
             Rows.AddThemeConstantOverride("separation", 4);
             scroll.SetContent(Rows);
             View.AddChild(scroll);
-            var footer = new HBoxContainer { ClipContents = true };
-            footer.AddThemeConstantOverride("separation", 8);
+            _footer = new() { ClipContents = true };
+            _footer.AddThemeConstantOverride("separation", (int)FooterSeparation);
+            _footer.Resized += UpdateFooterLayout;
             Status = new()
             {
                 AutowrapMode = TextServer.AutowrapMode.WordSmart,
@@ -166,7 +176,7 @@ namespace STS2RitsuMetrics.Ui
                 ClipText = true,
                 TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
             };
-            footer.AddChild(Status);
+            _footer.AddChild(Status);
             _footerContext = new()
             {
                 Visible = false,
@@ -175,13 +185,14 @@ namespace STS2RitsuMetrics.Ui
                 ClipText = true,
                 TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
             };
-            footer.AddChild(_footerContext);
-            View.AddChild(footer);
+            _footer.AddChild(_footerContext);
+            View.AddChild(_footer);
         }
 
         protected HBoxContainer Toolbar { get; }
         protected VBoxContainer Rows { get; }
         protected Label Status { get; }
+        public string? CompactSubtitle { get; protected set; }
 
         public Control View { get; }
 
@@ -194,11 +205,10 @@ namespace STS2RitsuMetrics.Ui
             Rows.AddThemeConstantOverride("separation", singleLine ? 2 : 4);
             Status.AddThemeFontSizeOverride("font_size", Math.Max(11, context.Style.FontSize - 1));
             Status.Modulate = ColorOf(context.Style.SecondaryTextColor);
-            Status.AutowrapMode = singleLine
-                ? TextServer.AutowrapMode.Off
-                : TextServer.AutowrapMode.WordSmart;
+            Status.AutowrapMode = TextServer.AutowrapMode.Off;
             _footerContext.AddThemeFontSizeOverride("font_size", Math.Max(11, context.Style.FontSize - 1));
             _footerContext.Modulate = ColorOf(context.Style.SecondaryTextColor);
+            CompactSubtitle = null;
             Render(context);
         }
 
@@ -210,13 +220,57 @@ namespace STS2RitsuMetrics.Ui
 
         public void SetFooterContext(string? text)
         {
-            _footerContext.Text = text ?? string.Empty;
-            _footerContext.Visible = !string.IsNullOrWhiteSpace(text);
+            SetFooterContext(text, null);
         }
 
         public string? Title { get; protected set; }
         public string? Subtitle { get; protected set; }
         public string? AccentColor { get; protected set; }
+
+        public void SetFooterContext(string? text, string? compactText)
+        {
+            _fullFooterContext = text ?? string.Empty;
+            _compactFooterContext = compactText ?? string.Empty;
+            _footerContext.Visible = !string.IsNullOrWhiteSpace(_fullFooterContext);
+            UpdateFooterLayout();
+        }
+
+        private void UpdateFooterLayout()
+        {
+            if (!_footerContext.Visible)
+            {
+                Status.SizeFlagsStretchRatio = 1f;
+                return;
+            }
+
+            var availableWidth = Math.Max(0f, _footer.Size.X - FooterSeparation);
+            var statusWidth = TextWidth(Status, Status.Text);
+            var fullContextWidth = TextWidth(_footerContext, _fullFooterContext);
+            var useCompact = !string.IsNullOrWhiteSpace(_compactFooterContext) &&
+                             statusWidth + fullContextWidth > availableWidth;
+            _footerContext.Text = useCompact ? _compactFooterContext : _fullFooterContext;
+            var contextWidth = TextWidth(_footerContext, _footerContext.Text);
+            if (statusWidth + contextWidth <= availableWidth)
+            {
+                Status.SizeFlagsStretchRatio = Math.Max(1f, statusWidth);
+                _footerContext.SizeFlagsStretchRatio = Math.Max(1f, contextWidth);
+                return;
+            }
+
+            var contextAllocation = Math.Min(contextWidth,
+                Math.Max(MinimumOverflowContextWidth, availableWidth - statusWidth));
+            contextAllocation = Math.Min(contextAllocation, availableWidth);
+            Status.SizeFlagsStretchRatio = Math.Max(1f, availableWidth - contextAllocation);
+            _footerContext.SizeFlagsStretchRatio = Math.Max(1f, contextAllocation);
+        }
+
+        private static float TextWidth(Label label, string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return 0f;
+            return label.GetThemeFont("font").GetStringSize(text,
+                fontSize: label.GetThemeFontSize("font_size")).X;
+        }
 
         protected virtual void Dispose(bool disposing)
         {
@@ -787,6 +841,7 @@ namespace STS2RitsuMetrics.Ui
             AccentColor = MetricAccent(metricId, context.Style);
             var snapshot = context.Snapshot;
             Subtitle = ScopeName(context.Scope);
+            CompactSubtitle = CompactScopeName(context.Scope);
             if (snapshot == null || snapshot.Players.Count == 0)
             {
                 Empty(context);
@@ -798,6 +853,9 @@ namespace STS2RitsuMetrics.Ui
             Subtitle = $"{ScopeName(context.Scope)}  ·  " +
                        $"{ModLocalization.Format("overlay.rounds", "{0} rounds", snapshot.RoundCount)}  ·  " +
                        $"{ModLocalization.Get("overlay.total", "Total")} {Format(total)}";
+            CompactSubtitle = $"{CompactScopeName(context.Scope)} · " +
+                              $"{ModLocalization.Format("overlay.roundsCompact", "{0}R", snapshot.RoundCount)} · " +
+                              $"{ModLocalization.Format("overlay.totalCompact", "Σ{0}", Format(total))}";
             var selected = _selectedPlayerKey == null
                 ? null
                 : values.FirstOrDefault(item => item.Player.PlayerKey == _selectedPlayerKey);
@@ -969,8 +1027,7 @@ namespace STS2RitsuMetrics.Ui
             string metricId,
             bool splitSummons)
         {
-            var useLegacyFallback = metricId is MetricIds.DamageContribution or MetricIds.DefenseContribution &&
-                                    snapshot.Players.All(player => !player.Totals.ContainsKey(metricId));
+            var useLegacyFallback = ShouldUseLegacyFallback(snapshot, metricId);
             if (!splitSummons)
                 return snapshot.Players
                     .Select(player => ResolveMeterEntry(player, metricId, useLegacyFallback))
@@ -1036,6 +1093,22 @@ namespace STS2RitsuMetrics.Ui
                 ContributionComponentIds.Execution;
         }
 
+        private static bool ShouldUseLegacyFallback(CombatSnapshot snapshot, string metricId)
+        {
+            if (snapshot.Players.Any(player => player.Totals.ContainsKey(metricId)))
+                return false;
+            if (metricId is MetricIds.DamageContribution or MetricIds.DefenseContribution)
+                return true;
+            if (metricId is not (MetricIds.EffectiveHpDamageDealt or
+                MetricIds.EffectiveHpDamageContribution))
+                return false;
+
+            var hasLegacyDamage = snapshot.Players.Any(player => player.Totals.ContainsKey(MetricIds.DamageDealt));
+            var hasOutputDamageSemantics = (snapshot.Timeline ?? []).Any(item => item.Damage is
+                { BlockedAmount: > 0m } damage && damage.EffectiveAmount > damage.HpLost);
+            return hasLegacyDamage && !hasOutputDamageSemantics;
+        }
+
         private static MeterEntry ResolveMeterEntry(
             PlayerMetricSnapshot player,
             string metricId,
@@ -1043,9 +1116,12 @@ namespace STS2RitsuMetrics.Ui
         {
             if (!useLegacyFallback)
                 return new(player, Metric(player, metricId));
-            var sourceMetricIds = metricId == MetricIds.DamageContribution
-                ? new[] { MetricIds.DamageDealt }
-                : new[] { MetricIds.DamageMitigated, MetricIds.DamageBlocked, MetricIds.HealingReceived };
+            var sourceMetricIds = metricId switch
+            {
+                MetricIds.DamageContribution or MetricIds.EffectiveHpDamageDealt or
+                    MetricIds.EffectiveHpDamageContribution => [MetricIds.DamageDealt],
+                _ => new[] { MetricIds.DamageMitigated, MetricIds.DamageBlocked, MetricIds.HealingReceived },
+            };
             var value = sourceMetricIds.Sum(sourceMetricId => Metric(player, sourceMetricId));
             var sources = sourceMetricIds.SelectMany(sourceMetricId =>
                     player.Sources.GetValueOrDefault(sourceMetricId) ?? [])
@@ -1103,7 +1179,8 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
-                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.DamageTaken or
+                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.EffectiveHpDamageDealt or
+                    MetricIds.EffectiveHpDamageContribution or MetricIds.DamageTaken or
                     MetricIds.Overkill => style.NegativeColor,
                 MetricIds.DamagePrevented or MetricIds.DefenseContribution or MetricIds.HealingContribution =>
                     style.PositiveColor,
@@ -1120,6 +1197,13 @@ namespace STS2RitsuMetrics.Ui
                 : ModLocalization.Get("overlay.currentCombat", "Current combat");
         }
 
+        private static string CompactScopeName(DashboardDataScope scope)
+        {
+            return scope == DashboardDataScope.CurrentRun
+                ? ModLocalization.Get("overlay.currentRunCompact", "Run")
+                : ModLocalization.Get("overlay.currentCombatCompact", "Combat");
+        }
+
         private sealed record MeterEntry(PlayerMetricSnapshot Player, decimal Value);
     }
 
@@ -1127,17 +1211,26 @@ namespace STS2RitsuMetrics.Ui
     {
         protected override bool Include(CombatTimelineEvent timelineEvent)
         {
-            return timelineEvent.Kind is CombatTimelineKind.CardPlay or CombatTimelineKind.CardDraw or
-                CombatTimelineKind.CardMove or CombatTimelineKind.Damage or CombatTimelineKind.Block or
-                CombatTimelineKind.Power or CombatTimelineKind.Effect or CombatTimelineKind.Execution;
+            if (timelineEvent.Kind == CombatTimelineKind.Attack)
+                return timelineEvent.Phase == TimelineEventPhase.Completed;
+            return timelineEvent.Kind is CombatTimelineKind.Combat or CombatTimelineKind.Turn or
+                CombatTimelineKind.Phase or CombatTimelineKind.HandDraw or CombatTimelineKind.CardPlay or
+                CombatTimelineKind.CardDraw or CombatTimelineKind.CardMove or CombatTimelineKind.Damage or
+                CombatTimelineKind.Block or CombatTimelineKind.Healing or CombatTimelineKind.HpLoss or
+                CombatTimelineKind.Power or CombatTimelineKind.Potion or CombatTimelineKind.Energy or
+                CombatTimelineKind.Orb or CombatTimelineKind.Summon or CombatTimelineKind.Shuffle or
+                CombatTimelineKind.Death or CombatTimelineKind.Execution;
         }
 
         protected override string RowText(CombatTimelineEvent timelineEvent)
         {
-            var actor = timelineEvent.Actor?.DisplayName ?? string.Empty;
-            var target = timelineEvent.Target?.DisplayName ?? string.Empty;
-            var value = timelineEvent.Value is { } amount ? $"  {Format(amount)}" : string.Empty;
-            return $"[T{timelineEvent.TurnIndex}] {actor} · {timelineEvent.DisplayText} → {target}{value}";
+            return $"[T{timelineEvent.TurnIndex}] {DashboardLocalization.TimelineDescription(timelineEvent)}";
+        }
+
+        protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            return CollapseSemanticCardMoves(timelineEvents);
         }
 
         protected override Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
@@ -1149,6 +1242,7 @@ namespace STS2RitsuMetrics.Ui
             {
                 CombatTimelineKind.Damage or CombatTimelineKind.Execution => style.NegativeColor,
                 CombatTimelineKind.Block => style.PositiveColor,
+                CombatTimelineKind.Turn or CombatTimelineKind.Phase or CombatTimelineKind.Combat => Accent(style, 1),
                 CombatTimelineKind.CardPlay or CombatTimelineKind.CardDraw or CombatTimelineKind.CardMove =>
                     Accent(style, 3),
                 _ => Accent(style, 4),
@@ -1156,7 +1250,9 @@ namespace STS2RitsuMetrics.Ui
             row.AddChild(Badge(badgeText, badgeColor, style));
             var label = TruncatedLabel(RowText(timelineEvent), style);
             row.AddChild(label);
-            return Surface(row, style, badgeColor, 4);
+            var surface = Surface(row, style, badgeColor, 4);
+            DashboardTooltip.Set(surface, DashboardLocalization.TimelineTooltip(timelineEvent));
+            return surface;
         }
     }
 
@@ -1271,7 +1367,7 @@ namespace STS2RitsuMetrics.Ui
 
             RebuildFilters(snapshot);
             var search = _search.Text.Trim();
-            var events = Timeline(snapshot).Where(Include);
+            var events = PrepareEvents(Timeline(snapshot).Where(Include));
             var turn = SelectedTurn();
             var playerKey = SelectedPlayerKey();
             if (turn != null)
@@ -1290,6 +1386,12 @@ namespace STS2RitsuMetrics.Ui
         protected abstract bool Include(CombatTimelineEvent timelineEvent);
         protected abstract string RowText(CombatTimelineEvent timelineEvent);
 
+        protected virtual IEnumerable<CombatTimelineEvent> PrepareEvents(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            return timelineEvents;
+        }
+
         protected virtual Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
         {
             return WrappedLabel(RowText(timelineEvent), style,
@@ -1300,7 +1402,49 @@ namespace STS2RitsuMetrics.Ui
         {
             return string.Join(' ', timelineEvent.ActionId, timelineEvent.DisplayText,
                 timelineEvent.Actor?.DisplayName, timelineEvent.Target?.DisplayName,
-                timelineEvent.Source?.DisplayName, timelineEvent.Source?.ModelId);
+                timelineEvent.Source?.DisplayName, timelineEvent.Source?.ModelId,
+                string.Join(' ', timelineEvent.Details.Select(detail => $"{detail.Key} {detail.Value}")));
+        }
+
+        protected static IEnumerable<CombatTimelineEvent> CollapseSemanticCardMoves(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            var events = timelineEvents.ToArray();
+            for (var index = 0; index < events.Length; index++)
+            {
+                var timelineEvent = events[index];
+                if (timelineEvent.ActionId != "card.move" || !HasSemanticCompanion(events, index, timelineEvent))
+                    yield return timelineEvent;
+            }
+        }
+
+        private static bool HasSemanticCompanion(
+            CombatTimelineEvent[] events,
+            int index,
+            CombatTimelineEvent cardMove)
+        {
+            var previous = cardMove.Details.GetValueOrDefault("previous_pile");
+            var current = cardMove.Details.GetValueOrDefault("current_pile");
+            var semanticAction = (previous, current) switch
+            {
+                ("Draw", "Hand") => "card.draw",
+                ("Hand", "Discard") => "card.discard",
+                (_, "Exhaust") => "card.exhaust",
+                _ => null,
+            };
+            if (semanticAction == null)
+                return false;
+            for (var candidateIndex = index + 1;
+                 candidateIndex < events.Length && candidateIndex <= index + 2;
+                 candidateIndex++)
+            {
+                var candidate = events[candidateIndex];
+                if (candidate.ActionId == semanticAction && candidate.Actor?.Key == cardMove.Actor?.Key &&
+                    candidate.Source?.Key == cardMove.Source?.Key)
+                    return true;
+            }
+
+            return false;
         }
 
         private void RebuildFilters(CombatSnapshot? snapshot)
@@ -1372,6 +1516,14 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class TimelineRenderer : FilteredTimelineRenderer
     {
+        private Dictionary<string, int> _depthByEventId = new(StringComparer.Ordinal);
+
+        protected override void Render(DashboardRenderContext context)
+        {
+            _depthByEventId = BuildDepthMap(context.Snapshot == null ? [] : Timeline(context.Snapshot));
+            base.Render(context);
+        }
+
         protected override bool Include(CombatTimelineEvent timelineEvent)
         {
             return true;
@@ -1379,23 +1531,32 @@ namespace STS2RitsuMetrics.Ui
 
         protected override string RowText(CombatTimelineEvent timelineEvent)
         {
-            var depth = timelineEvent.ParentEventId == null ? string.Empty : "  ↳ ";
-            var relation = timelineEvent.Actor?.DisplayName ?? timelineEvent.Source?.DisplayName ??
-                (timelineEvent.Kind is CombatTimelineKind.Turn or CombatTimelineKind.Phase
-                    ? DashboardLocalization.TurnSide(timelineEvent.Side)
-                    : timelineEvent.DisplayText);
-            var target = timelineEvent.Target == null ? string.Empty : $" → {timelineEvent.Target.DisplayName}";
-            var value = timelineEvent.Value is { } amount ? $"  {Format(amount)}" : string.Empty;
             var extra = timelineEvent.IsExtraTurn
                 ? $" [{ModLocalization.Get("analysis.extraTurn", "Extra turn")}]"
                 : string.Empty;
-            return $"{depth}{relation}{target} · {timelineEvent.ActionId}{value}{extra}";
+            return $"{DashboardLocalization.TimelineDescription(timelineEvent)}{extra}";
+        }
+
+        protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
+            IEnumerable<CombatTimelineEvent> timelineEvents)
+        {
+            return CollapseSemanticCardMoves(timelineEvents);
         }
 
         protected override Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
         {
             var row = new HBoxContainer { CustomMinimumSize = new(0, style.RowHeight + 2) };
             row.AddThemeConstantOverride("separation", 8);
+            var depth = _depthByEventId.GetValueOrDefault(timelineEvent.EventId);
+            if (depth > 0)
+            {
+                var branch = Label("↳", style, true, Math.Max(9, style.FontSize - 2));
+                branch.CustomMinimumSize = new(Math.Min(depth, 6) * 10f + 12f, 0f);
+                branch.HorizontalAlignment = HorizontalAlignment.Right;
+                branch.VerticalAlignment = VerticalAlignment.Center;
+                row.AddChild(branch);
+            }
+
             var color = timelineEvent.Kind switch
             {
                 CombatTimelineKind.Damage or CombatTimelineKind.Execution => style.NegativeColor,
@@ -1425,7 +1586,24 @@ namespace STS2RitsuMetrics.Ui
                 timelineEvent.Kind == CombatTimelineKind.DamageModifier);
             label.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(label);
+            DashboardTooltip.Set(row, DashboardLocalization.TimelineTooltip(timelineEvent));
             return row;
+        }
+
+        private static Dictionary<string, int> BuildDepthMap(
+            IReadOnlyList<CombatTimelineEvent> timelineEvents)
+        {
+            var depths = new Dictionary<string, int>(timelineEvents.Count, StringComparer.Ordinal);
+            foreach (var timelineEvent in timelineEvents.OrderBy(item => item.Sequence))
+            {
+                var depth = timelineEvent.ParentEventId != null &&
+                            depths.TryGetValue(timelineEvent.ParentEventId, out var parentDepth)
+                    ? parentDepth + 1
+                    : 0;
+                depths[timelineEvent.EventId] = depth;
+            }
+
+            return depths;
         }
     }
 
@@ -1513,7 +1691,7 @@ namespace STS2RitsuMetrics.Ui
             flow.HorizontalAlignment = HorizontalAlignment.Right;
             flow.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(flow);
-            var result = Label(Format(damage.HpLost), style, false, style.FontSize + 3);
+            var result = Label(Format(damage.HpLost + damage.BlockedAmount), style, false, style.FontSize + 3);
             result.CustomMinimumSize = new(62f, 0f);
             result.HorizontalAlignment = HorizontalAlignment.Right;
             result.VerticalAlignment = VerticalAlignment.Center;
@@ -1537,9 +1715,11 @@ namespace STS2RitsuMetrics.Ui
             details.AddThemeConstantOverride("separation", 8);
             var stages = new DashboardBarChart();
             stages.SetData([
-                new(ModLocalization.Get("dashboard.damage.requestedLabel", "Requested"), damage.RequestedAmount,
+                new(ModLocalization.Get("dashboard.damage.requestedLabel", "Requested"),
+                    damage.RequestedAmount,
                     Accent(style, 1), Format(damage.RequestedAmount)),
-                new(ModLocalization.Get("dashboard.damage.modifiedLabel", "Modified"), damage.ModifiedAmount,
+                new(ModLocalization.Get("dashboard.damage.modifiedLabel", "Modified"),
+                    damage.ModifiedAmount,
                     Accent(style, 3), Format(damage.ModifiedAmount)),
                 new(ModLocalization.Get("dashboard.damage.hpLostLabel", "HP lost"), damage.HpLost,
                     style.NegativeColor, Format(damage.HpLost)),

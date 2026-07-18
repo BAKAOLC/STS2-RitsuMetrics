@@ -240,7 +240,7 @@ namespace STS2RitsuMetrics.Ui
             DrawString(font,
                 new(center.X - totalWidth / 2f,
                     center.Y + (font.GetAscent(_fontSize + 2) - font.GetDescent(_fontSize + 2)) / 2f), totalText,
-                HorizontalAlignment.Left, -1f, _fontSize + 2, new("F0F4FAFF"));
+                HorizontalAlignment.Left, -1f, _fontSize + 2, new Color("F0F4FAFF"));
 
             var legendX = chartWidth + 5f;
             var legendWidth = Math.Max(50f, Size.X - legendX);
@@ -256,7 +256,7 @@ namespace STS2RitsuMetrics.Ui
                 var label = $"{item.Label}  {item.Value / _total:P0}";
                 var baseline = y + (rowHeight + font.GetAscent(_fontSize) - font.GetDescent(_fontSize)) / 2f;
                 DrawString(font, new(legendX + 15f, baseline), label, HorizontalAlignment.Left,
-                    legendWidth - 15f, _fontSize, new("B7C4D5FF"));
+                    legendWidth - 15f, _fontSize, new Color("B7C4D5FF"));
             }
         }
 
@@ -436,7 +436,8 @@ namespace STS2RitsuMetrics.Ui
             if (_hoverIndex >= 0 && _hoverIndex < points.Length)
             {
                 var selected = points[_hoverIndex];
-                DrawLine(new(selected.X, top), new(selected.X, top + height), new("DCE9F0A8"), 1.5f, true);
+                DrawLine(new(selected.X, top), new(selected.X, top + height), new("DCE9F0A8"), 1.5f,
+                    true);
                 DrawCircle(selected, 7f, new("0B111BF2"));
                 DrawArc(selected, 7f, 0f, MathF.Tau, 24, color, 2.5f, true);
                 DrawCircle(selected, 3.5f, color);
@@ -505,15 +506,15 @@ namespace STS2RitsuMetrics.Ui
             DrawLine(card.Position, new(card.End.X, card.Position.Y), accent with { A = 0.9f }, 2f);
             var titleSize = Math.Max(10, _fontSize - 1);
             DrawString(font, card.Position + new Vector2(8f, titleSize + 7f), item.Label,
-                HorizontalAlignment.Left, cardWidth - 16f, titleSize, new("BBC9DAFF"));
+                HorizontalAlignment.Left, cardWidth - 16f, titleSize, new Color("BBC9DAFF"));
             var value = Format(item.Value);
             var share = item.Value / _maximum;
             DrawString(font, card.Position + new Vector2(8f, titleSize * 2f + 12f),
                 $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {value}", HorizontalAlignment.Left,
-                cardWidth - 16f, _fontSize, new("F1F5FAFF"));
+                cardWidth - 16f, _fontSize, new Color("F1F5FAFF"));
             DrawString(font, card.Position + new Vector2(8f, cardHeight - 7f),
                 $"{ModLocalization.Get("dashboard.tooltip.peakShare", "Share of peak")}: {share:P1}",
-                HorizontalAlignment.Left, cardWidth - 16f, Math.Max(10, _fontSize - 1), new("9DB0C5FF"));
+                HorizontalAlignment.Left, cardWidth - 16f, Math.Max(10, _fontSize - 1), new Color("9DB0C5FF"));
         }
 
         private static string Short(decimal value)

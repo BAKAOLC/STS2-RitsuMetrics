@@ -141,7 +141,7 @@ namespace STS2RitsuMetrics.Ui
             var size = new Vector2I(width, height);
             _popup.MinSize = Vector2I.Zero;
             _popup.MaxSize = size;
-            _popup.Popup(new(new(x, y), size));
+            _popup.Popup(new Rect2I(new(x, y), size));
             if (Selected >= 0 && Selected < _rows.GetChildCount() && _rows.GetChild(Selected) is Control selectedRow)
                 Callable.From(() => FocusSelectedRow(selectedRow)).CallDeferred();
         }

@@ -2,6 +2,7 @@
 
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.ValueProps;
@@ -71,6 +72,8 @@ namespace STS2RitsuMetrics.Capture
         private static readonly AsyncLocal<DamageRequestCapture?> CurrentRequestValue = new();
         private static readonly AsyncLocal<DamageCalculationCapture?> CurrentCalculationValue = new();
         private static readonly ConcurrentDictionary<MethodBase, ArgumentLayout> ArgumentLayouts = new();
+        private static readonly ConditionalWeakTable<DamageResult, object> RecordedResults = new();
+        private static readonly object RecordedResultMarker = new();
 
         internal static bool HasActiveRequest => CurrentRequestValue.Value != null;
 
@@ -139,7 +142,8 @@ namespace STS2RitsuMetrics.Capture
             if (calculation == null)
                 return null;
             var input = calculation.CurrentValue;
-            return new(calculation, model, Layout(method).MethodName, input, calculation.FactorModifiers.Count);
+            return new(calculation, model, Layout(method).MethodName, input,
+                calculation.FactorModifiers.Count);
         }
 
         internal static FactorModifierState? BeginFactorModifier(AbstractModel model, MethodBase method, object[] args)
@@ -294,6 +298,7 @@ namespace STS2RitsuMetrics.Capture
         }
 
         internal static bool TryConsume(
+            DamageResult result,
             Creature receiver,
             Creature? dealer,
             CardModel? cardSource,
@@ -301,7 +306,19 @@ namespace STS2RitsuMetrics.Capture
             out DamageRequestCapture? request,
             out DamageCalculationCapture? calculation)
         {
+            MarkRecorded(result);
             request = CurrentRequestValue.Value;
+            return TryConsume(request, receiver, dealer, cardSource, props, out calculation);
+        }
+
+        internal static bool TryConsume(
+            DamageRequestCapture? request,
+            Creature receiver,
+            Creature? dealer,
+            CardModel? cardSource,
+            ValueProp props,
+            out DamageCalculationCapture? calculation)
+        {
             calculation = null;
             if (request == null)
                 return false;
@@ -318,6 +335,28 @@ namespace STS2RitsuMetrics.Capture
                 calculation.Consumed = true;
                 return true;
             }
+        }
+
+        internal static void CompleteRequest(
+            DamageRequestCapture request,
+            IEnumerable<DamageResult> results)
+        {
+            var unrecorded = results.Where(result => !RecordedResults.Remove(result)).ToArray();
+            if (unrecorded.Length == 0)
+                return;
+            try
+            {
+                CaptureBridge.DamageRequestCompleted?.Invoke(request, unrecorded);
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to recover damage results omitted from combat history: {exception}");
+            }
+        }
+
+        private static void MarkRecorded(DamageResult result)
+        {
+            RecordedResults.GetValue(result, static _ => RecordedResultMarker);
         }
 
         private static ArgumentLayout Layout(MethodBase method)

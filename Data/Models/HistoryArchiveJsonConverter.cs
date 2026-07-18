@@ -89,7 +89,8 @@ namespace STS2RitsuMetrics.Data.Models
             JsonSerializer.Serialize(writer, envelope, GetCompactOptions(options));
             lock (MetricsGate)
             {
-                _lastWriteMetrics = new(writeSequence, uncompressedBytes, compressedBytes, encodedPayloadBytes);
+                _lastWriteMetrics = new(writeSequence, uncompressedBytes, compressedBytes,
+                    encodedPayloadBytes);
             }
         }
 
@@ -194,7 +195,7 @@ namespace STS2RitsuMetrics.Data.Models
             var compressed = Compress(uncompressed);
             return compressed.Length <= uncompressed.Length * 4 / 5
                 ? new(combatId, BrotliEncoding, uncompressed.Length, compressed)
-                : new(combatId, JsonEncoding, uncompressed.Length, uncompressed);
+                : new StoredCombat(combatId, JsonEncoding, uncompressed.Length, uncompressed);
         }
 
         private static void CachePreparedCombat(string runId, CombatSnapshot combat, StoredCombat stored)
@@ -283,7 +284,8 @@ namespace STS2RitsuMetrics.Data.Models
 
         private static JsonSerializerOptions GetCompactOptions(JsonSerializerOptions options)
         {
-            return CompactOptions.GetValue(options, static source => new(source) { WriteIndented = false });
+            return CompactOptions.GetValue(options,
+                static source => new(source) { WriteIndented = false });
         }
 
         private static bool TryGetProperty(JsonElement root, string propertyName, out JsonElement value)

@@ -96,7 +96,8 @@ namespace STS2RitsuMetrics.Core
                 if (!_dashboards.ContainsKey(dashboardId))
                     return null;
                 instanceId = Guid.NewGuid().ToString("N");
-                _pendingOpenRequests.Enqueue(new(instanceId, dashboardId, options ?? new()));
+                _pendingOpenRequests.Enqueue(new(instanceId, dashboardId,
+                    options ?? new DashboardWindowOptions()));
             }
 
             OpenRequested?.Invoke();

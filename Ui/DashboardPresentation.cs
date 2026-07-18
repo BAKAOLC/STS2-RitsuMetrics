@@ -11,6 +11,18 @@ namespace STS2RitsuMetrics.Ui
         private const int MinimumFontSize = 12;
         private const int MaximumFontSize = 24;
 
+        internal static int MetricOrder(string metricId)
+        {
+            return metricId switch
+            {
+                MetricIds.DamageDealt => 0,
+                MetricIds.DamageContribution => 1,
+                MetricIds.EffectiveHpDamageDealt => 2,
+                MetricIds.EffectiveHpDamageContribution => 3,
+                _ => 100,
+            };
+        }
+
         internal static int FontSize(
             IReadOnlyDictionary<string, string> parameters,
             int fallback)

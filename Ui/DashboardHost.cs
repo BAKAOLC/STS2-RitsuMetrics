@@ -290,7 +290,7 @@ namespace STS2RitsuMetrics.Ui
             var cascade = _windows.Count % 10;
             var parameters = options.Parameters == null
                 ? new Dictionary<string, string>(StringComparer.Ordinal)
-                : new(options.Parameters, StringComparer.Ordinal);
+                : new Dictionary<string, string>(options.Parameters, StringComparer.Ordinal);
             parameters.TryAdd(DashboardParameterIds.Layout,
                 DashboardPresentation.NormalizeLayout(ModData.Settings.DefaultDashboardLayout));
             var state = new DashboardWindowSettings
@@ -457,7 +457,7 @@ namespace STS2RitsuMetrics.Ui
                     HasCustomPosition = options.PositionX != null || options.PositionY != null,
                     Parameters = options.Parameters == null
                         ? new(StringComparer.Ordinal)
-                        : new(options.Parameters, StringComparer.Ordinal),
+                        : new Dictionary<string, string>(options.Parameters, StringComparer.Ordinal),
                 };
                 AddPersistedWindow(state, provider);
             }

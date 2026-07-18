@@ -240,7 +240,7 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var damageEvents = Timeline(snapshot).Where(item => item.Damage != null).ToArray();
+            var damageEvents = Timeline(snapshot).Where(IsPlayerOffenseEvent).ToArray();
             var contributions = new Dictionary<string, ContributionRollup>(StringComparer.Ordinal);
             foreach (var timelineEvent in damageEvents)
             foreach (var contribution in timelineEvent.Damage!.Contributions)
@@ -448,11 +448,12 @@ namespace STS2RitsuMetrics.Ui
                 share.Contributor.Kind == AnalyticsEntityKind.Player) == true).ToArray();
             var records = new List<RecordRow>();
             AddMaximum(records, "analysis.recordHighestHit", "Highest effective hit", damageEvents,
-                item => item.Damage!.HpLost, DamageEventLabel);
+                item => DamageOutput(item.Damage!), DamageEventLabel);
             AddMaximum(records, "analysis.recordLargestRequest", "Largest requested hit", damageEvents,
                 item => item.Damage!.RequestedAmount, DamageEventLabel);
             var turnDamage = damageEvents.GroupBy(item => (item.CombatId, item.TurnIndex))
-                .Select(group => new NamedValue($"T{group.Key.TurnIndex}", group.Sum(item => item.Damage!.HpLost)))
+                .Select(group => new NamedValue($"T{group.Key.TurnIndex}",
+                    group.Sum(item => DamageOutput(item.Damage!))))
                 .ToArray();
             AddMaximum(records, "analysis.recordBestTurn", "Best damage turn", turnDamage, item => item.Value,
                 item => item.Name);
@@ -519,8 +520,10 @@ namespace STS2RitsuMetrics.Ui
 
         private void AddAttributionSummary(CombatSnapshot snapshot, DashboardStyleDefinition style)
         {
-            var shares = Timeline(snapshot).Where(item => item.Damage?.AttributionShares != null)
-                .SelectMany(item => item.Damage!.AttributionShares!).GroupBy(item => item.Contributor.Key)
+            var shares = Timeline(snapshot).Where(IsPlayerOffenseEvent)
+                .SelectMany(item => item.Damage!.AttributionShares!
+                    .Where(share => share.Contributor.Kind == AnalyticsEntityKind.Player))
+                .GroupBy(item => item.Contributor.Key)
                 .Select(group => new
                 {
                     group.First().Contributor,
@@ -537,6 +540,17 @@ namespace STS2RitsuMetrics.Ui
                     ModLocalization.Format("analysis.sourceValue", "{0} · {1} sources", Format(share.Value),
                         share.Sources), share.Value, maximum,
                     style.WarningColor, style));
+        }
+
+        private static bool IsPlayerOffenseEvent(CombatTimelineEvent timelineEvent)
+        {
+            return timelineEvent is
+                   {
+                       Damage.AttributionShares.Count: > 0,
+                       Target.Kind: not (AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon),
+                   } &&
+                   timelineEvent.Damage.AttributionShares.Any(share =>
+                       share.Contributor.Kind == AnalyticsEntityKind.Player);
         }
 
         private static Control CardEffectRow(SourceRollup source, bool card, DashboardStyleDefinition style)
@@ -685,7 +699,7 @@ namespace STS2RitsuMetrics.Ui
             var events = turn.ToArray();
             return new(turn.Key,
                 events.Where(item => item.Damage != null && item.Target?.Kind != AnalyticsEntityKind.Player)
-                    .Sum(item => item.Damage!.HpLost),
+                    .Sum(item => DamageOutput(item.Damage!)),
                 events.Where(item => item is { Damage: not null, Target.Kind: AnalyticsEntityKind.Player })
                     .Sum(item => item.Damage!.HpLost),
                 events.Where(item => item is
@@ -700,6 +714,11 @@ namespace STS2RitsuMetrics.Ui
                 events.Any(item => item.IsExtraTurn),
                 events.FirstOrDefault(item => item.Kind == CombatTimelineKind.Turn)?.Side ?? TimelineTurnSide.None,
                 events.Length);
+        }
+
+        private static decimal DamageOutput(DamageBreakdown damage)
+        {
+            return damage.HpLost + damage.BlockedAmount;
         }
 
         private static string TurnLabel(int turn)

@@ -106,13 +106,15 @@ namespace STS2RitsuMetrics.Core
             return CreatureSources.GetValue(creature, static value =>
             {
                 var entity = Creature(value);
-                return new($"creature:{entity.Key}", AnalyticsSourceKind.Creature, entity.ModelId, entity.DisplayName);
+                return new($"creature:{entity.Key}", AnalyticsSourceKind.Creature, entity.ModelId,
+                    entity.DisplayName);
             });
         }
 
         internal static SourceDescriptor Environment()
         {
-            return _environmentSource ??= new("system:environment", AnalyticsSourceKind.System, "environment",
+            return _environmentSource ??= new("system:environment", AnalyticsSourceKind.System,
+                "environment",
                 ModLocalization.Get("source.environment", "Environment"));
         }
 
@@ -144,7 +146,8 @@ namespace STS2RitsuMetrics.Core
             var displayName = ResolvePlayerDisplayName(player, characterName);
             if (string.IsNullOrWhiteSpace(displayName))
                 displayName = ModLocalization.Get("entity.unknownPlayer", "Unknown player");
-            return new($"player:{player.NetId}", AnalyticsEntityKind.Player, player.NetId, characterId, displayName,
+            return new($"player:{player.NetId}", AnalyticsEntityKind.Player, player.NetId, characterId,
+                displayName,
                 characterId);
         }
 
@@ -171,12 +174,14 @@ namespace STS2RitsuMetrics.Core
                 if (creature.PetOwner is { } owner)
                     return new($"summon:{owner.NetId}:{modelId}:{RuntimeHelpers.GetHashCode(creature)}",
                         AnalyticsEntityKind.Summon, owner.NetId, modelId, name);
-                return new($"monster:{modelId}:{RuntimeHelpers.GetHashCode(creature)}", AnalyticsEntityKind.Monster,
+                return new($"monster:{modelId}:{RuntimeHelpers.GetHashCode(creature)}",
+                    AnalyticsEntityKind.Monster,
                     null, modelId, name);
             }
 
             var fallback = Safe(() => creature.ModelId.Entry, creature.GetType().Name);
-            return new($"creature:{fallback}:{RuntimeHelpers.GetHashCode(creature)}", AnalyticsEntityKind.Unknown, null,
+            return new($"creature:{fallback}:{RuntimeHelpers.GetHashCode(creature)}",
+                AnalyticsEntityKind.Unknown, null,
                 fallback, fallback);
         }
 

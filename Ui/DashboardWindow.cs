@@ -588,8 +588,16 @@ namespace STS2RitsuMetrics.Ui
                         ModLocalization.Get(_definition.TitleLocalizationKey, _definition.FallbackTitle);
             var subtitle = Presentation?.Subtitle ?? ScopeName(_state.Scope);
             _title.Text = title;
-            if (_renderer is IDashboardRendererFooterPresentation footer)
-                footer.SetFooterContext(subtitle);
+            switch (_renderer)
+            {
+                case DashboardRendererBase builtInRenderer:
+                    builtInRenderer.SetFooterContext(subtitle, builtInRenderer.CompactSubtitle);
+                    break;
+                case IDashboardRendererFooterPresentation footer:
+                    footer.SetFooterContext(subtitle);
+                    break;
+            }
+
             _accent.Color = DashboardRendererBase.ColorOf(Presentation?.AccentColor ?? AccentForDashboard(style));
         }
 
@@ -598,6 +606,7 @@ namespace STS2RitsuMetrics.Ui
             return _state.DashboardId switch
             {
                 BuiltInDashboardIds.Meter or BuiltInDashboardIds.DamageContribution or
+                    BuiltInDashboardIds.EffectiveHpDamageContribution or
                     BuiltInDashboardIds.DamageBreakdown => style.NegativeColor,
                 BuiltInDashboardIds.DefenseContribution => style.PositiveColor,
                 BuiltInDashboardIds.ReceivedDamage => style.WarningColor,
@@ -662,11 +671,23 @@ namespace STS2RitsuMetrics.Ui
             var selections = new List<DashboardSelection>();
             foreach (var definition in definitions)
             {
+                switch (definition.Id)
+                {
+                    case BuiltInDashboardIds.DamageContribution:
+                        AddMetricSelection(MetricIds.DamageDealt);
+                        break;
+                    case BuiltInDashboardIds.EffectiveHpDamageContribution:
+                        AddMetricSelection(MetricIds.EffectiveHpDamageDealt);
+                        break;
+                }
+
                 if (definition.Id == BuiltInDashboardIds.Meter)
                 {
                     selections.AddRange(Main.Api.MetricDefinitions
                         .Where(metric => metric.Id is not
-                            (MetricIds.DamageContribution or MetricIds.DefenseContribution))
+                            (MetricIds.DamageDealt or MetricIds.DamageContribution or
+                            MetricIds.EffectiveHpDamageDealt or MetricIds.EffectiveHpDamageContribution or
+                            MetricIds.DefenseContribution))
                         .OrderBy(metric => metric.Category, StringComparer.Ordinal)
                         .ThenBy(metric => ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName),
                             StringComparer.CurrentCulture)
@@ -698,6 +719,20 @@ namespace STS2RitsuMetrics.Ui
 
             if (selected >= 0)
                 _title.Select(selected);
+            return;
+
+            void AddMetricSelection(string metricId)
+            {
+                var metric = Main.Api.MetricDefinitions.FirstOrDefault(candidate => candidate.Id == metricId);
+                if (metric == null)
+                    return;
+                selections.Add(new(BuiltInDashboardIds.Meter,
+                    ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName),
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        [DashboardParameterIds.MetricId] = metric.Id,
+                    }));
+            }
         }
 
         private void OnDashboardSelected(long index)
@@ -741,20 +776,21 @@ namespace STS2RitsuMetrics.Ui
             {
                 BuiltInDashboardIds.Overview => 0,
                 BuiltInDashboardIds.DamageContribution => 1,
-                BuiltInDashboardIds.DefenseContribution => 2,
-                BuiltInDashboardIds.Meter => 3,
-                BuiltInDashboardIds.DamageBreakdown => 4,
-                BuiltInDashboardIds.PlayerPerformance => 5,
-                BuiltInDashboardIds.SourceAnalysis => 6,
-                BuiltInDashboardIds.ContributionAnalysis => 7,
-                BuiltInDashboardIds.DefenseResources => 8,
-                BuiltInDashboardIds.CardsAndEffects => 9,
-                BuiltInDashboardIds.TurnAnalysis => 10,
-                BuiltInDashboardIds.Timeline => 11,
-                BuiltInDashboardIds.CardLog => 12,
-                BuiltInDashboardIds.ReceivedDamage => 13,
-                BuiltInDashboardIds.RunTrends => 14,
-                BuiltInDashboardIds.CombatRecords => 15,
+                BuiltInDashboardIds.EffectiveHpDamageContribution => 2,
+                BuiltInDashboardIds.DefenseContribution => 3,
+                BuiltInDashboardIds.Meter => 4,
+                BuiltInDashboardIds.DamageBreakdown => 5,
+                BuiltInDashboardIds.PlayerPerformance => 6,
+                BuiltInDashboardIds.SourceAnalysis => 7,
+                BuiltInDashboardIds.ContributionAnalysis => 8,
+                BuiltInDashboardIds.DefenseResources => 9,
+                BuiltInDashboardIds.CardsAndEffects => 10,
+                BuiltInDashboardIds.TurnAnalysis => 11,
+                BuiltInDashboardIds.Timeline => 12,
+                BuiltInDashboardIds.CardLog => 13,
+                BuiltInDashboardIds.ReceivedDamage => 14,
+                BuiltInDashboardIds.RunTrends => 15,
+                BuiltInDashboardIds.CombatRecords => 16,
                 _ => 100,
             };
         }

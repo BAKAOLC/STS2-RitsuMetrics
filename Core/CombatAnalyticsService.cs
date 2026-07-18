@@ -80,6 +80,7 @@ namespace STS2RitsuMetrics.Core
             CaptureBridge.IsCombatActive = null;
             CaptureBridge.FallbackParentResolver = null;
             CaptureBridge.EffectMaterialized = null;
+            CaptureBridge.DamageRequestCompleted = null;
         }
 
         internal void Initialize()
@@ -87,6 +88,7 @@ namespace STS2RitsuMetrics.Core
             CaptureBridge.IsCombatActive = () => _captureActive;
             CaptureBridge.FallbackParentResolver = () => _activeTurnEventId;
             CaptureBridge.EffectMaterialized = OnEffectMaterialized;
+            CaptureBridge.DamageRequestCompleted = OnDamageRequestCompleted;
 
             Subscribe<RunStartedEvent>(evt =>
                 StartNewRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc));
@@ -511,7 +513,7 @@ namespace STS2RitsuMetrics.Core
         private void OnCardDrawn(CardDrawnEvent evt)
         {
             var card = GameDescriptorFactory.Card(evt.Card);
-            AddTimeline(CombatTimelineKind.CardDraw, TimelineEventPhase.Instant, "card.draw", card.DisplayName,
+            AddTimeline(CombatTimelineKind.CardDraw, TimelineEventPhase.Instant, "card.draw", evt.Card.Title,
                 GameDescriptorFactory.Player(evt.Card.Owner), source: card, occurredAtUtc: evt.OccurredAtUtc,
                 details: Details(("from_hand_draw", evt.FromHandDraw.ToString())));
         }
@@ -522,7 +524,7 @@ namespace STS2RitsuMetrics.Core
             var card = GameDescriptorFactory.Card(play.Card);
             var parent = CausalScopeRuntime.ResolveParentEventId() ?? _activeTurnEventId;
             var started = AddTimeline(CombatTimelineKind.CardPlay, TimelineEventPhase.Started, "card.play",
-                card.DisplayName,
+                play.Card.Title,
                 GameDescriptorFactory.Player(play.Card.Owner), GameDescriptorFactory.CreatureOrNull(play.Target),
                 card, occurredAtUtc: evt.OccurredAtUtc, parentEventId: parent, bypassScope: true,
                 details: Details(
@@ -608,7 +610,8 @@ namespace STS2RitsuMetrics.Core
             var results = evt.Attack.Results.SelectMany(result => result).ToArray();
             AddTimeline(CombatTimelineKind.Attack, TimelineEventPhase.Completed, "attack.end", source.DisplayName,
                 GameDescriptorFactory.CreatureOrNull(evt.Attack.Attacker), source: source,
-                value: results.Sum(result => result.UnblockedDamage), occurredAtUtc: evt.OccurredAtUtc,
+                value: results.Sum(result => result.UnblockedDamage + result.BlockedDamage),
+                occurredAtUtc: evt.OccurredAtUtc,
                 parentEventId: scope.EventId, bypassScope: true,
                 details: Details(("hits", results.Length.ToString(CultureInfo.InvariantCulture))));
             CausalScopeRuntime.Restore(scope.State);
@@ -723,56 +726,97 @@ namespace STS2RitsuMetrics.Core
 
         private void RecordDamage(DamageReceivedEntry damage)
         {
-            DamageCaptureHub.TryConsume(damage.Receiver, damage.Dealer, damage.CardSource,
+            DamageCaptureHub.TryConsume(damage.Result, damage.Receiver, damage.Dealer, damage.CardSource,
                 damage.Result.Props, out _, out var calculation);
-            var cause = calculation?.Cause ?? CausalScopeRuntime.Snapshot();
-            var source = cause?.Source ?? (damage.CardSource is { } cardSource
-                ? GameDescriptorFactory.Card(cardSource)
-                : GameDescriptorFactory.CreatureSource(damage.Dealer));
-            var directDealer = GameDescriptorFactory.Player(damage.Dealer);
-            var dealerEntity = GameDescriptorFactory.CreatureOrNull(damage.Dealer);
+            RecordDamage(damage.Result, damage.Receiver, damage.Dealer, damage.CardSource, calculation, null);
+        }
 
-            var receiver = GameDescriptorFactory.Creature(damage.Receiver);
-            var hpLost = (decimal)damage.Result.UnblockedDamage;
-            var blocked = (decimal)damage.Result.BlockedDamage;
-            var overkill = (decimal)damage.Result.OverkillDamage;
+        private void OnDamageRequestCompleted(
+            DamageRequestCapture request,
+            IReadOnlyList<DamageResult> unrecordedResults)
+        {
+            if (!_captureActive || _activeCombat == null)
+                return;
+            Main.Logger.Debug($"Recovered {unrecordedResults.Count} damage result(s) omitted from combat history.");
+            foreach (var result in unrecordedResults)
+            {
+                DamageCaptureHub.TryConsume(request, result.Receiver, request.Dealer, request.CardSource,
+                    result.Props, out var calculation);
+                RecordDamage(result, result.Receiver, request.Dealer, request.CardSource, calculation, request.Cause);
+            }
+        }
+
+        private void RecordDamage(
+            DamageResult result,
+            Creature damageReceiver,
+            Creature? damageDealer,
+            CardModel? damageCardSource,
+            DamageCalculationCapture? calculation,
+            CausalScopeSnapshot? requestCause)
+        {
+            var cause = calculation?.Cause ?? requestCause ?? CausalScopeRuntime.Snapshot();
+            var source = cause?.Source ?? (damageCardSource != null
+                ? GameDescriptorFactory.Card(damageCardSource)
+                : GameDescriptorFactory.CreatureSource(damageDealer));
+            var directDealer = GameDescriptorFactory.Player(damageDealer);
+            var dealerEntity = GameDescriptorFactory.CreatureOrNull(damageDealer);
+
+            var receiver = GameDescriptorFactory.Creature(damageReceiver);
+            var hpLost = (decimal)result.UnblockedDamage;
+            var blocked = (decimal)result.BlockedDamage;
+            var overkill = (decimal)result.OverkillDamage;
+            var damageDealt = hpLost + blocked;
             var modified = calculation?.ModifiedAmount ?? hpLost + blocked + overkill;
             var requested = calculation?.RequestedAmount ?? modified;
-            var contributions = BuildContributions(calculation, source, requested, modified, blocked, hpLost,
+            var contributions = BuildContributions(calculation, source, requested, modified, blocked, damageDealt,
                 overkill);
-            var attributionShares = ResolveAttributionShares(damage.Receiver, cause?.Model, damage.Result.Props,
-                hpLost, directDealer, source);
+            var attributionShares = ResolveAttributionShares(damageReceiver, cause?.Model, result.Props,
+                damageDealt, directDealer, source);
+            var effectiveHpShares = ScaleShares(attributionShares, hpLost);
             if (directDealer == null && attributionShares.Length > 0)
                 source = attributionShares[0].Source;
-            var breakdown = new DamageBreakdown(requested, modified, blocked, hpLost, overkill, hpLost,
-                damage.Result.Props.ToString(), contributions, attributionShares);
+            var breakdown = new DamageBreakdown(requested, modified, blocked, hpLost, overkill, damageDealt,
+                result.Props.ToString(), contributions, attributionShares);
             var tags = WithActorTags(Tags(
-                ("value_props", damage.Result.Props.ToString()),
-                ("was_kill", damage.Result.WasTargetKilled.ToString()),
-                ("fully_blocked", damage.Result.WasFullyBlocked.ToString()),
+                ("value_props", result.Props.ToString()),
+                ("was_kill", result.WasTargetKilled.ToString()),
+                ("fully_blocked", result.WasFullyBlocked.ToString()),
                 ("attribution",
                     calculation != null
                         ? nameof(AttributionConfidence.Exact)
-                        : nameof(AttributionConfidence.Heuristic))), damage.Dealer);
+                        : nameof(AttributionConfidence.Heuristic))), damageDealer);
 
-            foreach (var share in AggregateShares(attributionShares).Where(share => share.EffectiveContribution > 0m))
-                Record(share.Contributor, MetricIds.DamageDealt, share.EffectiveContribution, share.Source, receiver,
-                    tags);
-            RecordOffensiveContributions(damage.Receiver, calculation, contributions, attributionShares, hpLost,
-                receiver, tags);
-            var receivingPlayer = GameDescriptorFactory.Player(damage.Receiver);
+            var receivingPlayer = GameDescriptorFactory.Player(damageReceiver);
+            if (receivingPlayer == null)
+            {
+                foreach (var share in AggregateShares(attributionShares)
+                             .Where(share => share.EffectiveContribution > 0m))
+                    Record(share.Contributor, MetricIds.DamageDealt, share.EffectiveContribution, share.Source,
+                        receiver,
+                        tags);
+                foreach (var share in AggregateShares(effectiveHpShares)
+                             .Where(share => share.EffectiveContribution > 0m))
+                    Record(share.Contributor, MetricIds.EffectiveHpDamageDealt, share.EffectiveContribution,
+                        share.Source,
+                        receiver, tags);
+                RecordOffensiveContributions(damageReceiver, calculation, contributions, attributionShares, damageDealt,
+                    receiver, tags, MetricIds.DamageContribution);
+                RecordOffensiveContributions(damageReceiver, calculation, contributions, effectiveHpShares, hpLost,
+                    receiver, tags, MetricIds.EffectiveHpDamageContribution);
+            }
+
             if (receivingPlayer != null && hpLost > 0)
                 Record(receivingPlayer, MetricIds.DamageTaken, hpLost, source,
-                    GameDescriptorFactory.CreatureOrNull(damage.Dealer), tags);
+                    GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
             if (receivingPlayer != null && blocked > 0)
             {
                 Record(receivingPlayer, MetricIds.DamageBlocked, blocked, source,
-                    GameDescriptorFactory.CreatureOrNull(damage.Dealer), tags);
-                RecordBlockedContribution(damage.Receiver, receivingPlayer, blocked,
-                    GameDescriptorFactory.CreatureOrNull(damage.Dealer), tags);
+                    GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
+                RecordBlockedContribution(damageReceiver, receivingPlayer, blocked,
+                    GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
             }
 
-            if (overkill > 0m && attributionShares.Length > 0)
+            if (receivingPlayer == null && overkill > 0m && attributionShares.Length > 0)
                 foreach (var share in AggregateShares(ScaleShares(attributionShares, overkill)))
                     Record(share.Contributor, MetricIds.Overkill, share.EffectiveContribution, share.Source, receiver,
                         tags);
@@ -781,10 +825,10 @@ namespace STS2RitsuMetrics.Core
                 source.DisplayName,
                 dealerEntity ?? (attributionShares.Length > 0 ? attributionShares[0].Contributor : null),
                 receiver, source,
-                hpLost, damage: breakdown, parentEventId: cause?.EventId,
-                details: Details(("value_props", damage.Result.Props.ToString()),
-                    ("killed", damage.Result.WasTargetKilled.ToString()),
-                    ("fully_blocked", damage.Result.WasFullyBlocked.ToString()),
+                damageDealt, damage: breakdown, parentEventId: cause?.EventId,
+                details: Details(("value_props", result.Props.ToString()),
+                    ("killed", result.WasTargetKilled.ToString()),
+                    ("fully_blocked", result.WasFullyBlocked.ToString()),
                     ("attribution", calculation != null ? "exact" : "heuristic"),
                     ("contributors", attributionShares.Length.ToString(CultureInfo.InvariantCulture)),
                     ("origin_event_ids", string.Join(';', attributionShares.Select(share => share.OriginEventId)
@@ -806,7 +850,7 @@ namespace STS2RitsuMetrics.Core
                         ("factor", contribution.Factor?.ToString(CultureInfo.InvariantCulture) ?? string.Empty),
                         ("confidence", contribution.Confidence.ToString())));
                 if (calculation != null)
-                    RecordModifierMetric(damage.Receiver, calculation, contribution, receiver, tags);
+                    RecordModifierMetric(damageReceiver, calculation, contribution, receiver, tags);
             }
         }
 
@@ -815,11 +859,12 @@ namespace STS2RitsuMetrics.Core
             DamageCalculationCapture? calculation,
             IReadOnlyList<DamageContribution> contributions,
             IReadOnlyList<DamageAttributionShare> directShares,
-            decimal hpLost,
+            decimal realizedDamage,
             EntityDescriptor target,
-            IReadOnlyDictionary<string, string> tags)
+            IReadOnlyDictionary<string, string> tags,
+            string metricId)
         {
-            if (hpLost <= 0m || GameDescriptorFactory.Player(receiver) != null)
+            if (realizedDamage <= 0m || GameDescriptorFactory.Player(receiver) != null)
                 return;
             var positive = contributions.Where(contribution => contribution is
                 {
@@ -833,7 +878,7 @@ namespace STS2RitsuMetrics.Core
 
             foreach (var contribution in positive)
             {
-                var realized = hpLost * contribution.EffectiveContribution / grossContribution;
+                var realized = realizedDamage * contribution.EffectiveContribution / grossContribution;
                 var shares = contribution.Stage is DamageContributionStage.Base or DamageContributionStage.Execution
                     ? ScaleShares(directShares, realized)
                     : ResolveModifierShares(receiver, calculation, contribution, realized);
@@ -846,8 +891,8 @@ namespace STS2RitsuMetrics.Core
                     _ => ContributionComponentIds.DamageAmplification,
                 };
                 foreach (var share in AggregateShares(shares))
-                    Record(share.Contributor, MetricIds.DamageContribution, share.EffectiveContribution,
-                        contribution.Source, target,
+                    Record(share.Contributor, metricId, share.EffectiveContribution,
+                        share.Source, target,
                         ContributionTags(tags, component, share.Confidence));
             }
         }
@@ -858,10 +903,11 @@ namespace STS2RitsuMetrics.Core
             decimal requested,
             decimal modified,
             decimal blocked,
-            decimal hpLost,
+            decimal effectiveDamage,
             decimal overkill)
         {
-            var scale = modified == 0m ? 0m : hpLost / modified;
+            var hpLost = effectiveDamage - blocked;
+            var scale = modified == 0m ? 0m : effectiveDamage / modified;
             var confidence = calculation != null ? AttributionConfidence.Exact : AttributionConfidence.Heuristic;
             var contributions = new List<DamageContribution>
             {
@@ -871,10 +917,12 @@ namespace STS2RitsuMetrics.Core
             if (calculation == null)
             {
                 if (blocked > 0m)
-                    contributions.Add(new(GameDescriptorFactory.Environment(), DamageContributionStage.Block,
+                    contributions.Add(new(GameDescriptorFactory.Environment(),
+                        DamageContributionStage.Block,
                         modified, modified - blocked, -blocked, -blocked, null, AttributionConfidence.Exact));
                 if (overkill > 0m)
-                    contributions.Add(new(GameDescriptorFactory.Environment(), DamageContributionStage.Overkill,
+                    contributions.Add(new(GameDescriptorFactory.Environment(),
+                        DamageContributionStage.Overkill,
                         hpLost + overkill, hpLost, -overkill, -overkill, null, AttributionConfidence.Exact));
                 return contributions.AsReadOnly();
             }
@@ -885,7 +933,8 @@ namespace STS2RitsuMetrics.Core
             {
                 if (modifier.Stage == DamageContributionStage.HpLoss)
                     continue;
-                contributions.Add(new(modifier.Source, modifier.Stage, modifier.InputValue, modifier.OutputValue,
+                contributions.Add(new(modifier.Source, modifier.Stage, modifier.InputValue,
+                    modifier.OutputValue,
                     modifier.RawContribution, modifier.RawContribution * scale, modifier.Factor,
                     AttributionConfidence.Exact, modifier.Context));
                 capturedOutput = modifier.OutputValue;
@@ -893,7 +942,8 @@ namespace STS2RitsuMetrics.Core
 
             var residual = modified - capturedOutput;
             if (residual != 0m)
-                contributions.Add(new(GameDescriptorFactory.Environment(), DamageContributionStage.Additive,
+                contributions.Add(new(GameDescriptorFactory.Environment(),
+                    DamageContributionStage.Additive,
                     capturedOutput, modified, residual, residual * scale, null, AttributionConfidence.Derived,
                     "Host-side clamp or an unexposed modifier"));
             if (blocked > 0m)
@@ -904,13 +954,15 @@ namespace STS2RitsuMetrics.Core
             {
                 if (modifier.Stage != DamageContributionStage.HpLoss)
                     continue;
-                contributions.Add(new(modifier.Source, modifier.Stage, modifier.InputValue, modifier.OutputValue,
+                contributions.Add(new(modifier.Source, modifier.Stage, modifier.InputValue,
+                    modifier.OutputValue,
                     modifier.RawContribution, modifier.RawContribution, modifier.Factor,
                     AttributionConfidence.Exact, modifier.Context));
             }
 
             if (overkill > 0m)
-                contributions.Add(new(GameDescriptorFactory.Environment(), DamageContributionStage.Overkill,
+                contributions.Add(new(GameDescriptorFactory.Environment(),
+                    DamageContributionStage.Overkill,
                     hpLost + overkill, hpLost, -overkill, -overkill, null, AttributionConfidence.Exact));
             return contributions.AsReadOnly();
         }
@@ -980,7 +1032,10 @@ namespace STS2RitsuMetrics.Core
                 cardProvider, source);
             var receivingPlayer = GameDescriptorFactory.Player(block.Receiver);
             if (shares.Length == 0 && receivingPlayer != null)
-                shares = [new(receivingPlayer, source, 1m, block.Amount, AttributionConfidence.Heuristic)];
+                shares =
+                [
+                    new(receivingPlayer, source, 1m, block.Amount, AttributionConfidence.Heuristic),
+                ];
             if (shares.Length > 0)
             {
                 if (!_blockCredits.TryGetValue(block.Receiver, out var credits))
@@ -1217,17 +1272,25 @@ namespace STS2RitsuMetrics.Core
                 details: Details(("effective_contribution", amount.ToString(CultureInfo.InvariantCulture)),
                     ("doom_execution", (doomSource != null).ToString()),
                     ("attribution", contribution.Confidence.ToString())));
-            foreach (var share in AggregateShares(attributionShares))
-            {
-                Record(share.Contributor, MetricIds.DamageDealt, share.EffectiveContribution, share.Source, target,
-                    Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")));
-                Record(share.Contributor, MetricIds.DamageContribution, share.EffectiveContribution, share.Source,
-                    target, ContributionTags(null,
-                        isExecution ? ContributionComponentIds.Execution : ContributionComponentIds.BaseDamage,
-                        share.Confidence));
-            }
-
             var receivingPlayer = GameDescriptorFactory.Player(evt.Creature);
+            if (receivingPlayer == null)
+                foreach (var share in AggregateShares(attributionShares))
+                {
+                    Record(share.Contributor, MetricIds.DamageDealt, share.EffectiveContribution, share.Source, target,
+                        Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")));
+                    Record(share.Contributor, MetricIds.DamageContribution, share.EffectiveContribution, share.Source,
+                        target, ContributionTags(null,
+                            isExecution ? ContributionComponentIds.Execution : ContributionComponentIds.BaseDamage,
+                            share.Confidence));
+                    Record(share.Contributor, MetricIds.EffectiveHpDamageDealt, share.EffectiveContribution,
+                        share.Source,
+                        target, Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")));
+                    Record(share.Contributor, MetricIds.EffectiveHpDamageContribution, share.EffectiveContribution,
+                        share.Source, target, ContributionTags(null,
+                            isExecution ? ContributionComponentIds.Execution : ContributionComponentIds.BaseDamage,
+                            share.Confidence));
+                }
+
             if (receivingPlayer != null)
                 Record(receivingPlayer, MetricIds.DamageTaken, amount, sourceDescriptor, actor,
                     Tags(("execution", isExecution.ToString()), ("direct_hp_loss", "True")));

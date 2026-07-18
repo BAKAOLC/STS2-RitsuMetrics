@@ -198,7 +198,11 @@ namespace STS2RitsuMetrics.Ui
             Select(_dashboard, _dashboardIds, selectedDashboard ?? BuiltInDashboardIds.Meter);
 
             var selectedMetric = Selected(_metric, _metricIds);
-            var metrics = Main.Api.MetricDefinitions.OrderBy(item => item.Category).ThenBy(item => item.Id).ToArray();
+            var metrics = Main.Api.MetricDefinitions.OrderBy(item => DashboardPresentation.MetricOrder(item.Id))
+                .ThenBy(item => item.Category, StringComparer.Ordinal)
+                .ThenBy(item => ModLocalization.Get(item.NameLocalizationKey, item.FallbackName),
+                    StringComparer.CurrentCulture)
+                .ToArray();
             _metricIds = metrics.Select(item => item.Id).ToArray();
             _metric.Clear();
             foreach (var metric in metrics)
@@ -330,7 +334,8 @@ namespace STS2RitsuMetrics.Ui
                 : ModLocalization.Get(definition.DescriptionLocalizationKey, definition.FallbackDescription);
             var needsMetric = dashboardId == BuiltInDashboardIds.Meter;
             var supportsSummons = dashboardId is BuiltInDashboardIds.Meter or
-                BuiltInDashboardIds.DamageContribution or BuiltInDashboardIds.DefenseContribution;
+                BuiltInDashboardIds.DamageContribution or BuiltInDashboardIds.EffectiveHpDamageContribution or
+                BuiltInDashboardIds.DefenseContribution;
             _metricField.Visible = needsMetric;
             _summonField.Visible = supportsSummons;
         }

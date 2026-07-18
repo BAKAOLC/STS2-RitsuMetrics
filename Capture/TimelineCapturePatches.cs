@@ -303,11 +303,25 @@ namespace STS2RitsuMetrics.Capture
             __state = DamageCaptureHub.BeginRequest(__originalMethod, __args);
         }
 
-        private static void DamageRequestPostfix(bool __runOriginal, DamageCaptureHub.RequestState? __state)
+        private static void DamageRequestPostfix(ref Task<IEnumerable<DamageResult>> __result, bool __runOriginal,
+            DamageCaptureHub.RequestState? __state)
         {
             if (!__runOriginal && __state != null)
                 Interlocked.Increment(ref _skippedDamageRequests);
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            if (__state != null && __result != null)
+                __result = CompleteDamageRequest(__result, __state.Request);
             DamageCaptureHub.RestoreRequest(__state);
+        }
+
+        private static async Task<IEnumerable<DamageResult>> CompleteDamageRequest(
+            Task<IEnumerable<DamageResult>> resultTask,
+            DamageRequestCapture request)
+        {
+            var results = await resultTask;
+            if (results is IReadOnlyList<DamageResult> materialized)
+                DamageCaptureHub.CompleteRequest(request, materialized);
+            return results;
         }
 
         private static Exception? DamageRequestFinalizer(Exception? __exception, DamageCaptureHub.RequestState? __state)

@@ -170,6 +170,7 @@ namespace STS2RitsuMetrics.Ui
                 BuiltInDashboardIds.Overview,
                 BuiltInDashboardIds.PlayerPerformance,
                 BuiltInDashboardIds.DamageContribution,
+                BuiltInDashboardIds.EffectiveHpDamageContribution,
                 BuiltInDashboardIds.DefenseContribution,
                 BuiltInDashboardIds.Meter,
                 BuiltInDashboardIds.SourceAnalysis,
@@ -196,8 +197,11 @@ namespace STS2RitsuMetrics.Ui
             Select(_dashboard, _dashboardIds, selectedDashboard);
 
             var selectedMetric = Selected(_metric, _metricIds) ?? MetricIds.DamageContribution;
-            var metrics = Main.Api.MetricDefinitions.OrderBy(metric => metric.Category)
-                .ThenBy(metric => metric.Id, StringComparer.Ordinal).ToArray();
+            var metrics = Main.Api.MetricDefinitions.OrderBy(metric => DashboardPresentation.MetricOrder(metric.Id))
+                .ThenBy(metric => metric.Category, StringComparer.Ordinal)
+                .ThenBy(metric => ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName),
+                    StringComparer.CurrentCulture)
+                .ToArray();
             _metricIds = metrics.Select(metric => metric.Id).ToArray();
             _metric.Clear();
             foreach (var metric in metrics)
