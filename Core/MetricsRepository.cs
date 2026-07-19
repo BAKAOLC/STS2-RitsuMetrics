@@ -24,6 +24,28 @@ namespace STS2RitsuMetrics.Core
             }
         }
 
+        internal bool HasLiveCombat
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _liveRun?.GetActiveCombat() != null || _retainedCombat != null;
+                }
+            }
+        }
+
+        internal bool HasLiveRunCombat
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _liveRun?.HasAnyCombat() == true;
+                }
+            }
+        }
+
         internal void SetLiveRun(MutableRunSession? run)
         {
             lock (_gate)
@@ -69,6 +91,14 @@ namespace STS2RitsuMetrics.Core
             lock (_gate)
             {
                 return _liveRun?.Snapshot(includeEvents);
+            }
+        }
+
+        internal RunSnapshot? GetLiveRunForDashboard()
+        {
+            lock (_gate)
+            {
+                return _liveRun?.SnapshotForLiveView();
             }
         }
 
@@ -189,6 +219,129 @@ namespace STS2RitsuMetrics.Core
                 Main.Logger.Error($"Failed to delete analytics run '{runId}': {exception}");
                 return false;
             }
+        }
+
+        internal static void ReconcileLegacyMultiplayerRuns()
+        {
+            try
+            {
+                var runs = ModData.History.Runs.ToList();
+                var mergedCount = 0;
+                while (TryMergeLegacyMultiplayerPair(runs, out var merged, out var leftId, out var rightId))
+                {
+                    runs.RemoveAll(run => run.RunId == leftId || run.RunId == rightId);
+                    runs.Add(merged);
+                    mergedCount++;
+                }
+
+                if (mergedCount == 0)
+                    return;
+                ModData.ModifyHistory(archive =>
+                {
+                    archive.Runs.Clear();
+                    archive.Runs.AddRange(runs.OrderBy(run => run.StartedAtUtc));
+                }, operation: "multiplayer run identity reconciliation");
+                Main.Logger.Info($"Reconciled {mergedCount} legacy multiplayer run split(s).");
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to reconcile legacy multiplayer run identities: {exception}");
+            }
+        }
+
+        private static bool TryMergeLegacyMultiplayerPair(
+            IReadOnlyList<RunSnapshot> runs,
+            out RunSnapshot merged,
+            out string leftId,
+            out string rightId)
+        {
+            var candidates = runs.Where(run => run.IsMultiplayer &&
+                                               run.RunId.StartsWith("sts2-v1-", StringComparison.Ordinal) &&
+                                               run.Combats.Count > 0)
+                .OrderBy(FirstActivity)
+                .ToArray();
+            for (var leftIndex = 0; leftIndex < candidates.Length - 1; leftIndex++)
+            {
+                var left = candidates[leftIndex];
+                for (var rightIndex = leftIndex + 1; rightIndex < candidates.Length; rightIndex++)
+                {
+                    var right = candidates[rightIndex];
+                    if (!AreContinuousLegacySegments(left, right))
+                        continue;
+                    merged = MergeRuns(left, right);
+                    leftId = left.RunId;
+                    rightId = right.RunId;
+                    return true;
+                }
+            }
+
+            merged = null!;
+            leftId = string.Empty;
+            rightId = string.Empty;
+            return false;
+        }
+
+        private static bool AreContinuousLegacySegments(RunSnapshot left, RunSnapshot right)
+        {
+            if (left.IsDaily != right.IsDaily || !SamePlayerRoster(left, right))
+                return false;
+            var leftLast = left.Combats.MaxBy(combat => combat.EndedAtUtc ?? combat.StartedAtUtc)!;
+            var leftFirstFloor = left.Combats.Min(combat => combat.Floor);
+            var rightFirst = right.Combats.MinBy(combat => combat.StartedAtUtc)!;
+            var gap = rightFirst.StartedAtUtc - (leftLast.EndedAtUtc ?? leftLast.StartedAtUtc);
+            return gap >= TimeSpan.Zero && gap <= TimeSpan.FromMinutes(30) &&
+                   rightFirst.ActIndex >= leftLast.ActIndex && rightFirst.ActIndex <= leftLast.ActIndex + 1 &&
+                   rightFirst.Floor > leftFirstFloor && rightFirst.Floor <= leftLast.Floor + 10;
+        }
+
+        private static bool SamePlayerRoster(RunSnapshot left, RunSnapshot right)
+        {
+            var leftPlayers = RecordedPlayers(left);
+            var rightPlayers = RecordedPlayers(right);
+            return leftPlayers.Count >= 2 && leftPlayers.Count == rightPlayers.Count &&
+                   leftPlayers.All(player => rightPlayers.TryGetValue(player.Key, out var characterId) &&
+                                             string.Equals(player.Value, characterId, StringComparison.Ordinal));
+        }
+
+        private static Dictionary<ulong, string> RecordedPlayers(RunSnapshot run)
+        {
+            return run.Combats.SelectMany(combat => combat.Players)
+                .Where(player => player.PlayerNetId.HasValue)
+                .GroupBy(player => player.PlayerNetId!.Value)
+                .ToDictionary(group => group.Key,
+                    group => group.Select(player => player.CharacterId)
+                        .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty);
+        }
+
+        private static RunSnapshot MergeRuns(RunSnapshot left, RunSnapshot right)
+        {
+            var runId = right.RunId;
+            var combats = left.Combats.Concat(right.Combats)
+                .GroupBy(combat => combat.CombatId, StringComparer.Ordinal)
+                .Select(group => RebindRunId(group.OrderByDescending(combat => combat.Timeline?.Count ?? 0).First(),
+                    runId))
+                .OrderBy(combat => combat.StartedAtUtc)
+                .ToArray();
+            return right with
+            {
+                StartedAtUtc = left.StartedAtUtc < right.StartedAtUtc ? left.StartedAtUtc : right.StartedAtUtc,
+                Combats = combats,
+            };
+        }
+
+        private static CombatSnapshot RebindRunId(CombatSnapshot combat, string runId)
+        {
+            return combat with
+            {
+                RunId = runId,
+                Events = combat.Events.Select(observation => observation with { RunId = runId }).ToArray(),
+                Timeline = combat.Timeline?.Select(timelineEvent => timelineEvent with { RunId = runId }).ToArray(),
+            };
+        }
+
+        private static DateTimeOffset FirstActivity(RunSnapshot run)
+        {
+            return run.Combats.Select(combat => combat.StartedAtUtc).DefaultIfEmpty(run.StartedAtUtc).Min();
         }
 
         private static HistoryTrimResult TrimToCombatLimit(List<RunSnapshot> runs, int combatLimit)

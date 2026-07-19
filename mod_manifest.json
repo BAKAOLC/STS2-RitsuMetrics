@@ -3,7 +3,7 @@
   "name": "RitsuMetrics / 律析",
   "author": "OLC",
   "description": "Read-only combat analytics with extensible collectors, historical queries, export APIs, and a customizable overlay.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "min_game_version": "0.107.1",
   "has_pck": false,
   "has_dll": true,

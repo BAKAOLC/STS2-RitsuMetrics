@@ -16,6 +16,7 @@ namespace STS2RitsuMetrics.Ui
         private const int FloatingWindowLayer = 120;
         private const int ControlSurfaceLayer = FloatingWindowLayer + 1;
         private const int BehindCapstoneLayer = -1;
+        private const double DashboardDataRefreshInterval = 0.12d;
         private readonly Lock _dashboardDataGate = new();
 
         private readonly Dictionary<string, DashboardWindow> _windows = new(StringComparer.Ordinal);
@@ -25,6 +26,7 @@ namespace STS2RitsuMetrics.Ui
         private CombatSnapshot? _cachedRunSnapshot;
         private long _cachedSnapshotRevision = -1;
         private bool _capstoneInUse;
+        private double _dashboardDataRefreshDelay;
         private DashboardManagerPanel? _manager;
         private DashboardRegistry _registry = null!;
         private int _settingsHash;
@@ -156,6 +158,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Process(double delta)
         {
+            _dashboardDataRefreshDelay = Math.Max(0d, _dashboardDataRefreshDelay - delta);
+            RefreshDashboardDataIfDue();
             var capstoneInUse = NCapstoneContainer.Instance?.InUse == true;
             if (capstoneInUse && !_capstoneInUse)
                 _manager?.HideForSystemMenu();
@@ -340,18 +344,9 @@ namespace STS2RitsuMetrics.Ui
 
         internal (CombatSnapshot? Snapshot, RunSnapshot? Run) ResolveDashboardData(DashboardDataScope scope)
         {
+            EnsureDashboardDataCache();
             lock (_dashboardDataGate)
             {
-                if (_cachedSnapshotRevision != _snapshotRevision)
-                {
-                    _cachedRun = Main.Repository.GetLiveRun(true);
-                    _cachedCombatSnapshot = _cachedRun is { Combats.Count: > 0 }
-                        ? _cachedRun.Combats[^1]
-                        : Main.Repository.GetLiveCombat(true);
-                    _cachedRunSnapshot = null;
-                    _cachedSnapshotRevision = _snapshotRevision;
-                }
-
                 if (scope == DashboardDataScope.CurrentRun)
                     _cachedRunSnapshot ??= SnapshotAggregator.Combine(_cachedRun);
                 return (scope == DashboardDataScope.CurrentRun ? _cachedRunSnapshot : _cachedCombatSnapshot,
@@ -483,21 +478,69 @@ namespace STS2RitsuMetrics.Ui
             }
 
             UpdateVisibility();
+        }
+
+        private void RefreshDashboardDataIfDue()
+        {
+            if (_dashboardDataRefreshDelay > 0d || !HasVisibleDataConsumer())
+                return;
+            long revision;
+            lock (_dashboardDataGate)
+            {
+                if (_cachedSnapshotRevision == _snapshotRevision)
+                    return;
+                revision = _snapshotRevision;
+            }
+
+            RefreshDashboardData(revision);
+            _dashboardDataRefreshDelay = DashboardDataRefreshInterval;
             foreach (var window in _windows.Values)
                 window.MarkDirty();
             _analysisCenter?.MarkDirty();
+        }
+
+        private void EnsureDashboardDataCache()
+        {
+            long revision;
+            lock (_dashboardDataGate)
+            {
+                if (_cachedSnapshotRevision >= 0)
+                    return;
+                revision = _snapshotRevision;
+            }
+
+            RefreshDashboardData(revision);
+        }
+
+        private void RefreshDashboardData(long revision)
+        {
+            var run = Main.Repository.GetLiveRunForDashboard();
+            var combat = run is { Combats.Count: > 0 }
+                ? run.Combats[^1]
+                : Main.Repository.GetLiveCombat(true);
+            lock (_dashboardDataGate)
+            {
+                _cachedRun = run;
+                _cachedCombatSnapshot = combat;
+                _cachedRunSnapshot = null;
+                _cachedSnapshotRevision = revision;
+            }
+        }
+
+        private bool HasVisibleDataConsumer()
+        {
+            return _analysisCenter?.Visible == true || _windows.Values.Any(window => window.Visible);
         }
 
         private void UpdateVisibility()
         {
             var settings = ModData.Settings;
             var runManager = RunManager.Instance;
-            var hasLiveCombat = Main.Repository.GetLiveCombat(false) != null;
+            var hasLiveCombat = Main.Repository.HasLiveCombat;
             var isRunCompletionView = runManager.IsInProgress &&
                                       (runManager.IsGameOver ||
                                        runManager.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true);
-            var hasCompletedCombat = isRunCompletionView &&
-                                     Main.Repository.GetLiveRun(false)?.Combats.Count > 0;
+            var hasCompletedCombat = isRunCompletionView && Main.Repository.HasLiveRunCombat;
             var showFloatingDashboards = settings.OverlayEnabled && runManager.IsInProgress &&
                                          (hasLiveCombat || hasCompletedCombat);
             foreach (var window in _windows.Values)

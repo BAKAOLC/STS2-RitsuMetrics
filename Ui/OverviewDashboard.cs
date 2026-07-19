@@ -64,8 +64,8 @@ namespace STS2RitsuMetrics.Ui
             flow.AddThemeConstantOverride("v_separation", 8);
             flow.AddChild(BuildTopSources(players, Sections[(int)OverviewSection.Offense], context.Style));
             flow.AddChild(BuildSourceComposition(players, Sections[(int)OverviewSection.Offense], context.Style));
-            flow.AddChild(BuildTurnTrend(snapshot, Sections[(int)OverviewSection.Offense], context.Style));
-            flow.AddChild(BuildTurnTrend(snapshot, Sections[(int)OverviewSection.Defense], context.Style));
+            flow.AddChild(BuildTrend(context, Sections[(int)OverviewSection.Offense]));
+            flow.AddChild(BuildTrend(context, Sections[(int)OverviewSection.Defense]));
             Rows.AddChild(flow);
 
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatAnalysis", "Combat analysis"),
@@ -254,14 +254,22 @@ namespace STS2RitsuMetrics.Ui
             return Surface(body, style, Accent(style, 5));
         }
 
-        private static Control BuildTurnTrend(
-            CombatSnapshot snapshot,
-            OverviewSectionDefinition definition,
-            DashboardStyleDefinition style)
+        private static Control BuildTrend(
+            DashboardRenderContext context,
+            OverviewSectionDefinition definition)
         {
-            var body = ChartBody(ModLocalization.Format("overview.turnTrend.section", "{0} turn trend",
-                    ModLocalization.Get(definition.LocalizationKey, definition.FallbackName)), style,
-                Accent(style, definition.AccentIndex));
+            var style = context.Style;
+            var sectionName = ModLocalization.Get(definition.LocalizationKey, definition.FallbackName);
+            if (context is
+                {
+                    Scope: DashboardDataScope.CurrentRun,
+                    Run: { Combats.Count: > 0 } run,
+                })
+                return BuildCombatTrend(run, definition, sectionName, style);
+
+            var snapshot = context.Snapshot!;
+            var body = ChartBody(ModLocalization.Format("overview.turnTrend.section", "{0} turn trend", sectionName),
+                style, Accent(style, definition.AccentIndex));
             var turns = Timeline(snapshot).Where(item => item.TurnIndex > 0)
                 .GroupBy(item => (item.CombatId, item.TurnIndex))
                 .Select(group => new TurnPoint(group.Min(item => item.OccurredAtUtc), group.Key.TurnIndex,
@@ -278,6 +286,35 @@ namespace STS2RitsuMetrics.Ui
                 var chart = new DashboardLineChart();
                 chart.SetData(turns.Select(turn => new DashboardLineDatum($"T{turn.TurnIndex}", turn.Value)),
                     Accent(style, definition.AccentIndex), Math.Max(11, style.FontSize - 1));
+                body.AddChild(chart);
+            }
+
+            return Surface(body, style, Accent(style, definition.AccentIndex));
+        }
+
+        private static Control BuildCombatTrend(
+            RunSnapshot run,
+            OverviewSectionDefinition definition,
+            string sectionName,
+            DashboardStyleDefinition style)
+        {
+            var body = ChartBody(ModLocalization.Format("overview.combatTrend.section", "{0} by combat", sectionName),
+                style, Accent(style, definition.AccentIndex));
+            var combats = run.Combats.OrderBy(combat => combat.StartedAtUtc).ToArray();
+            var points = combats.Select((combat, index) => new DashboardLineDatum(
+                ModLocalization.Format("analysis.floorShort", "F{0}", combat.Floor),
+                TurnValue(Timeline(combat), definition.Section),
+                ModLocalization.Format("analysis.runTrendPoint", "#{0} · Act {1} · {2} · {3} rounds",
+                    index + 1, combat.ActIndex + 1, combat.EncounterName, combat.RoundCount))).ToArray();
+            if (points.All(point => point.Value <= 0m))
+            {
+                body.AddChild(WrappedLabel(ModLocalization.Get("overview.noTurnData", "No trend data"), style, true));
+            }
+            else
+            {
+                var chart = new DashboardLineChart();
+                chart.SetData(points, Accent(style, definition.AccentIndex), Math.Max(11, style.FontSize - 1),
+                    DashboardLineSeriesKind.Combat);
                 body.AddChild(chart);
             }
 

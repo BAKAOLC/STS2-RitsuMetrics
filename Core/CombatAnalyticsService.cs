@@ -85,6 +85,7 @@ namespace STS2RitsuMetrics.Core
 
         internal void Initialize()
         {
+            MetricsRepository.ReconcileLegacyMultiplayerRuns();
             CaptureBridge.IsCombatActive = () => _captureActive;
             CaptureBridge.FallbackParentResolver = () => _activeTurnEventId;
             CaptureBridge.EffectMaterialized = OnEffectMaterialized;
@@ -184,7 +185,10 @@ namespace STS2RitsuMetrics.Core
             var previous = repository.GetLiveRun(true);
             if (previous is { Combats.Count: > 0 })
                 MetricsRepository.SaveRunSnapshot(previous);
-            var session = CreateRunSession(runState, isMultiplayer, isDaily, occurredAtUtc);
+            var identity = ResolveRunIdentity(runState, isMultiplayer, isDaily, occurredAtUtc);
+            if (isMultiplayer)
+                identity = AllocateNewMultiplayerIdentity(identity, occurredAtUtc);
+            var session = CreateRunSession(identity, isMultiplayer, isDaily);
             _liveRun = session;
             _activeCombat = null;
             _pendingRestoredCombat = null;
@@ -203,7 +207,9 @@ namespace STS2RitsuMetrics.Core
             if (previous?.RunId != identity.RunId &&
                 previous?.Snapshot(true) is { Combats.Count: > 0 } previousSnapshot)
                 MetricsRepository.SaveRunSnapshot(previousSnapshot);
-            var saved = MetricsRepository.GetSavedRun(identity.RunId);
+            var saved = FindSavedRunForResume(identity, runState, isMultiplayer, isDaily);
+            if (saved == null && isMultiplayer)
+                identity = AllocateNewMultiplayerIdentity(identity, occurredAtUtc);
             var session = saved == null
                 ? CreateRunSession(identity, isMultiplayer, isDaily)
                 : MutableRunSession.Restore(saved);
@@ -220,7 +226,8 @@ namespace STS2RitsuMetrics.Core
             collectors.NotifyChanged();
             Main.Logger.Info(
                 $"Resumed analytics run '{LogId(session.RunId)}' from " +
-                $"{(saved == null ? "live game state" : $"saved history with {saved.Combats.Count} combat(s)")}.");
+                $"{(saved == null ? "live game state" : $"saved history with {saved.Combats.Count} combat(s)")}" +
+                $"{(saved != null && saved.RunId != identity.RunId ? " via compatible multiplayer identity" : string.Empty)}.");
         }
 
         private void OnRunSaved(RunSavedEvent evt)
@@ -1732,16 +1739,6 @@ namespace STS2RitsuMetrics.Core
         }
 
         private static MutableRunSession CreateRunSession(
-            IRunState runState,
-            bool isMultiplayer,
-            bool isDaily,
-            DateTimeOffset occurredAtUtc)
-        {
-            return CreateRunSession(ResolveRunIdentity(runState, isMultiplayer, isDaily, occurredAtUtc),
-                isMultiplayer, isDaily);
-        }
-
-        private static MutableRunSession CreateRunSession(
             RunIdentity identity,
             bool isMultiplayer,
             bool isDaily)
@@ -1778,8 +1775,11 @@ namespace STS2RitsuMetrics.Core
 
             var seed = Safe(() => runState.Rng.StringSeed, string.Empty);
             var canonical = new StringBuilder(256);
-            AppendIdentityPart(canonical, "ritsumetrics-run-v1");
-            AppendIdentityPart(canonical, startTime.ToString(CultureInfo.InvariantCulture));
+            AppendIdentityPart(canonical, isMultiplayer
+                ? "ritsumetrics-multiplayer-run-v2"
+                : "ritsumetrics-run-v1");
+            if (!isMultiplayer)
+                AppendIdentityPart(canonical, startTime.ToString(CultureInfo.InvariantCulture));
             AppendIdentityPart(canonical, seed);
             AppendIdentityPart(canonical, ((int)runState.GameMode).ToString(CultureInfo.InvariantCulture));
             AppendIdentityPart(canonical, runState.AscensionLevel.ToString(CultureInfo.InvariantCulture));
@@ -1802,15 +1802,92 @@ namespace STS2RitsuMetrics.Core
                 AppendIdentityPart(canonical, modifierId);
 
             var bytes = Encoding.UTF8.GetBytes(canonical.ToString());
-            var runId = "sts2-v1-" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+            var runId = (isMultiplayer ? "sts2-mp-v2-" : "sts2-v1-") +
+                        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             var startedAtUtc = startTime > 0L
                 ? Safe(() => DateTimeOffset.FromUnixTimeSeconds(startTime), occurredAtUtc)
                 : occurredAtUtc;
             Main.Logger.Debug(
-                $"Resolved analytics run identity '{LogId(runId)}': start_time_source={startTimeSource}, " +
+                $"Resolved analytics run identity '{LogId(runId)}': identity_version=" +
+                $"{(isMultiplayer ? "multiplayer-v2" : "v1")}, start_time_source={startTimeSource}, " +
+                $"start_time_in_hash={!isMultiplayer}, " +
                 $"players={runState.Players.Count}, modifiers={runState.Modifiers.Count}, " +
                 $"seed_present={!string.IsNullOrEmpty(seed)}.");
             return new(runId, startedAtUtc);
+        }
+
+        private static RunIdentity AllocateNewMultiplayerIdentity(
+            RunIdentity identity,
+            DateTimeOffset occurredAtUtc)
+        {
+            var prefix = identity.RunId + '-';
+            var collision = MetricsRepository.GetSavedRuns(false, false).Any(run =>
+                run.RunId == identity.RunId || run.RunId.StartsWith(prefix, StringComparison.Ordinal));
+            if (!collision)
+                return identity;
+            var discriminator = $"{identity.RunId}:{occurredAtUtc.UtcTicks.ToString(CultureInfo.InvariantCulture)}";
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(discriminator)))
+                .ToLowerInvariant()[..16];
+            return identity with { RunId = $"{identity.RunId}-{hash}" };
+        }
+
+        private static RunSnapshot? FindSavedRunForResume(
+            RunIdentity identity,
+            RunState runState,
+            bool isMultiplayer,
+            bool isDaily)
+        {
+            var runs = MetricsRepository.GetSavedRuns(false, false);
+            if (!isMultiplayer)
+                return runs.LastOrDefault(run => run.RunId == identity.RunId);
+
+            var prefix = identity.RunId + '-';
+            var stable = runs.Where(run => run.IsMultiplayer && run.IsDaily == isDaily &&
+                                           run.EndedAtUtc == null &&
+                                           (run.RunId == identity.RunId ||
+                                            run.RunId.StartsWith(prefix, StringComparison.Ordinal)))
+                .OrderByDescending(LastActivity)
+                .FirstOrDefault();
+            if (stable != null)
+                return stable;
+
+            var currentPlayers = runState.Players.ToDictionary(player => player.NetId,
+                player => Safe(() => player.Character.Id.Entry, string.Empty));
+            return runs.Where(run => run.RunId.StartsWith("sts2-v1-", StringComparison.Ordinal) &&
+                                     run.IsMultiplayer && run.IsDaily == isDaily && run.EndedAtUtc == null &&
+                                     HasCompatiblePlayers(run, currentPlayers))
+                .OrderByDescending(run => LastRecordedFloor(run) <= runState.TotalFloor)
+                .ThenByDescending(run => Math.Min(LastRecordedFloor(run), runState.TotalFloor))
+                .ThenByDescending(LastActivity)
+                .FirstOrDefault();
+        }
+
+        private static bool HasCompatiblePlayers(
+            RunSnapshot run,
+            Dictionary<ulong, string> currentPlayers)
+        {
+            var recordedPlayers = run.Combats.SelectMany(combat => combat.Players)
+                .Where(player => player.PlayerNetId.HasValue)
+                .GroupBy(player => player.PlayerNetId!.Value)
+                .ToDictionary(group => group.Key,
+                    group => group.Select(player => player.CharacterId)
+                        .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty);
+            return recordedPlayers.Count > 0 && recordedPlayers.All(recorded =>
+                currentPlayers.TryGetValue(recorded.Key, out var characterId) &&
+                (string.IsNullOrEmpty(recorded.Value) || string.Equals(recorded.Value, characterId,
+                    StringComparison.Ordinal)));
+        }
+
+        private static DateTimeOffset LastActivity(RunSnapshot run)
+        {
+            return run.Combats.Select(combat => combat.EndedAtUtc ?? combat.StartedAtUtc)
+                .DefaultIfEmpty(run.StartedAtUtc)
+                .Max();
+        }
+
+        private static int LastRecordedFloor(RunSnapshot run)
+        {
+            return run.Combats.Select(combat => combat.Floor).DefaultIfEmpty(-1).Max();
         }
 
         private static void AppendIdentityPart(StringBuilder builder, string value)

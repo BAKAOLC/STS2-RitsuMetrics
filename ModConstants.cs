@@ -5,7 +5,7 @@ namespace STS2RitsuMetrics
     public static class ModConstants
     {
         public const string ModId = "STS2-RitsuMetrics";
-        public const string Version = "0.1.10";
+        public const string Version = "0.1.11";
         public const int ApiVersion = 1;
         public const string SettingsKey = "settings";
         public const string HistoryKey = "history";

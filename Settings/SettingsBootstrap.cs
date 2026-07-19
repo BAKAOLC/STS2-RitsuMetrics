@@ -20,6 +20,9 @@ namespace STS2RitsuMetrics.Settings
             if (_initialized)
                 return;
 
+            var toggleKeyBinding = Binding(settings => settings.ToggleKey,
+                (settings, value) => settings.ToggleKey = value);
+
             RitsuLibFramework.RegisterModSettings(ModConstants.ModId, page => page
                 .WithModDisplayName(T("mod.name", "RitsuMetrics"))
                 .WithTitle(T("settings.title", "RitsuMetrics"))
@@ -29,7 +32,11 @@ namespace STS2RitsuMetrics.Settings
                     .AddToggle("overlay_enabled", T("settings.overlayEnabled", "Show analytics overlay"),
                         Binding(settings => settings.OverlayEnabled,
                             (settings, value) => settings.OverlayEnabled = value),
-                        T("settings.overlayEnabled.description", "The F10 hotkey can also show or hide the overlay."))
+                        ModSettingsText.Dynamic(() => ModLocalization.Format(
+                                "settings.overlayEnabled.description",
+                                "The {0} hotkey can also show or hide the overlay.",
+                                ModData.Settings.ToggleKey),
+                            toggleKeyBinding))
                     .AddToggle("show_percentages", T("settings.showPercentages", "Show percentages"),
                         Binding(settings => settings.ShowPercentages,
                             (settings, value) => settings.ShowPercentages = value))
@@ -67,7 +74,7 @@ namespace STS2RitsuMetrics.Settings
                             (settings, value) => settings.OpacityPercent = value),
                         0, 100, 5, value => $"{value}%")
                     .AddKeyBinding("toggle_key", T("settings.toggleKey", "Toggle hotkey"),
-                        Binding(settings => settings.ToggleKey, (settings, value) => settings.ToggleKey = value),
+                        toggleKeyBinding,
                         allowModifierOnly: false)
                     .AddButton("manage_dashboards", T("settings.manageDashboards", "Manage floating dashboards"),
                         T("settings.manageDashboards.open", "Open"), () => Main.DashboardHost?.ToggleManager())

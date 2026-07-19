@@ -19,7 +19,14 @@ namespace STS2RitsuMetrics.Ui
 
     public readonly record struct DashboardLineDatum(
         string Label,
-        decimal Value);
+        decimal Value,
+        string Detail = "");
+
+    public enum DashboardLineSeriesKind
+    {
+        Turn,
+        Combat,
+    }
 
     public sealed partial class DashboardBarChart : Control
     {
@@ -356,6 +363,7 @@ namespace STS2RitsuMetrics.Ui
         private int _fontSize = 13;
         private int _hoverIndex = -1;
         private decimal _maximum = 1m;
+        private DashboardLineSeriesKind _seriesKind;
 
         public DashboardLineChart()
         {
@@ -367,12 +375,14 @@ namespace STS2RitsuMetrics.Ui
             SetProcessInput(true);
         }
 
-        public void SetData(IEnumerable<DashboardLineDatum> data, string color, int fontSize)
+        public void SetData(IEnumerable<DashboardLineDatum> data, string color, int fontSize,
+            DashboardLineSeriesKind seriesKind = DashboardLineSeriesKind.Turn)
         {
             _data = data.ToArray();
             _color = color;
             _fontSize = Math.Max(10, fontSize);
             _maximum = Math.Max(1m, _data.Select(item => item.Value).DefaultIfEmpty().Max());
+            _seriesKind = seriesKind;
             QueueRedraw();
         }
 
@@ -429,8 +439,11 @@ namespace STS2RitsuMetrics.Ui
                 var y = top + height - height * (float)(_data[index].Value / _maximum);
                 points[index] = new(x, y);
                 if (index > 0)
-                    DrawLine(points[index - 1], points[index], color with { A = 0.9f }, 2.5f, true);
-                DrawCircle(points[index], 3.5f, color);
+                    DrawLine(points[index - 1], points[index], color with { A = 0.9f },
+                        _seriesKind == DashboardLineSeriesKind.Combat ? 2f : 2.5f, true);
+                if (_seriesKind == DashboardLineSeriesKind.Combat)
+                    DrawLine(new(x, top + height), points[index], color with { A = 0.18f }, 1f, true);
+                DrawCircle(points[index], _seriesKind == DashboardLineSeriesKind.Combat ? 4.5f : 3.5f, color);
             }
 
             if (_hoverIndex >= 0 && _hoverIndex < points.Length)
@@ -496,8 +509,10 @@ namespace STS2RitsuMetrics.Ui
             float selectedX)
         {
             var item = _data[_hoverIndex];
-            var cardWidth = Math.Clamp(Size.X * 0.4f, 150f, 220f);
-            var cardHeight = Math.Max(61f, _fontSize * 3f + 18f);
+            var hasDetail = !string.IsNullOrWhiteSpace(item.Detail);
+            var cardWidth = Math.Clamp(Size.X * 0.46f, 170f, 270f);
+            var lineHeight = _fontSize + 5f;
+            var cardHeight = Math.Max(hasDetail ? 82f : 64f, lineHeight * (hasDetail ? 4f : 3f) + 10f);
             var x = selectedX <= left + plotWidth / 2f
                 ? Size.X - right - cardWidth
                 : left;
@@ -507,9 +522,18 @@ namespace STS2RitsuMetrics.Ui
             var titleSize = Math.Max(10, _fontSize - 1);
             DrawString(font, card.Position + new Vector2(8f, titleSize + 7f), item.Label,
                 HorizontalAlignment.Left, cardWidth - 16f, titleSize, new Color("BBC9DAFF"));
+            var valueY = titleSize * 2f + 12f;
+            if (hasDetail)
+            {
+                DrawString(font, card.Position + new Vector2(8f, valueY), item.Detail,
+                    HorizontalAlignment.Left, cardWidth - 16f, Math.Max(10, _fontSize - 1),
+                    new Color("9DB0C5FF"));
+                valueY += lineHeight;
+            }
+
             var value = Format(item.Value);
             var share = item.Value / _maximum;
-            DrawString(font, card.Position + new Vector2(8f, titleSize * 2f + 12f),
+            DrawString(font, card.Position + new Vector2(8f, valueY),
                 $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {value}", HorizontalAlignment.Left,
                 cardWidth - 16f, _fontSize, new Color("F1F5FAFF"));
             DrawString(font, card.Position + new Vector2(8f, cardHeight - 7f),

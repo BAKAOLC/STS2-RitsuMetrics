@@ -390,7 +390,11 @@ namespace STS2RitsuMetrics.Ui
 
         private void RenderRunTrends(DashboardRenderContext context)
         {
-            var combats = context.Run?.Combats ?? (context.Snapshot == null ? [] : [context.Snapshot]);
+            var combats = context.Scope == DashboardDataScope.CurrentRun
+                ? context.Run?.Combats ?? []
+                : context.Snapshot == null
+                    ? []
+                    : [context.Snapshot];
             if (combats.Count == 0)
             {
                 Empty(context);
@@ -402,25 +406,24 @@ namespace STS2RitsuMetrics.Ui
             charts.AddThemeConstantOverride("h_separation", 8);
             charts.AddThemeConstantOverride("v_separation", 8);
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damageDealt", "Damage"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}", TotalDamage(combat))),
+                CombatTrend(ordered, TotalDamage),
                 context.Style.NegativeColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damageTaken", "Damage taken"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    TotalSurvival(combat).PlayerHpLost)),
+                CombatTrend(ordered, combat => TotalSurvival(combat).PlayerHpLost),
                 context.Style.WarningColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.summonHpLost", "Summon HP lost"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    TotalSurvival(combat).SummonHpLost)), Accent(context.Style, 4), context.Style));
+                CombatTrend(ordered, combat => TotalSurvival(combat).SummonHpLost), Accent(context.Style, 4),
+                context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.summonDeaths", "Summon deaths"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    TotalSurvival(combat).SummonDeaths)), context.Style.NegativeColor, context.Style));
+                CombatTrend(ordered, combat => TotalSurvival(combat).SummonDeaths), context.Style.NegativeColor,
+                context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.blocked", "Blocked"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    combat.Players.Sum(player => Metric(player, MetricIds.DamageBlocked)))),
+                CombatTrend(ordered,
+                    combat => combat.Players.Sum(player => Metric(player, MetricIds.DamageBlocked))),
                 context.Style.PositiveColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damagePerTurn", "Damage / turn"),
-                ordered.Select(combat => new DashboardLineDatum($"F{combat.Floor}",
-                    TotalDamage(combat) / Math.Max(1, combat.RoundCount))), Accent(context.Style, 1), context.Style));
+                CombatTrend(ordered, combat => TotalDamage(combat) / Math.Max(1, combat.RoundCount)),
+                Accent(context.Style, 1), context.Style));
             Rows.AddChild(charts);
             AddSection(ModLocalization.Get("analysis.combatDetails", "Combat details"), Accent(context.Style, 1),
                 context.Style, true);
@@ -457,6 +460,17 @@ namespace STS2RitsuMetrics.Ui
 
             Status.Text = ModLocalization.Format("analysis.runTrendSummary", "{0} combats · {1} total damage",
                 combats.Count, Format(combats.Sum(TotalDamage)));
+        }
+
+        private static IEnumerable<DashboardLineDatum> CombatTrend(
+            IReadOnlyList<CombatSnapshot> combats,
+            Func<CombatSnapshot, decimal> value)
+        {
+            return combats.Select((combat, index) => new DashboardLineDatum(
+                ModLocalization.Format("analysis.floorShort", "F{0}", combat.Floor),
+                value(combat),
+                ModLocalization.Format("analysis.runTrendPoint", "#{0} · Act {1} · {2} · {3} rounds",
+                    index + 1, combat.ActIndex + 1, combat.EncounterName, combat.RoundCount)));
         }
 
         private void RenderRecords(DashboardRenderContext context)
@@ -705,7 +719,7 @@ namespace STS2RitsuMetrics.Ui
             heading.AddChild(TruncatedLabel(title, style, false, style.FontSize + 1));
             body.AddChild(heading);
             var chart = new DashboardLineChart();
-            chart.SetData(data, color, Math.Max(10, style.FontSize - 2));
+            chart.SetData(data, color, Math.Max(10, style.FontSize - 2), DashboardLineSeriesKind.Combat);
             body.AddChild(chart);
             return Surface(body, style, padding: 7);
         }

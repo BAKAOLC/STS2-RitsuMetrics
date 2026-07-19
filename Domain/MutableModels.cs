@@ -27,6 +27,14 @@ namespace STS2RitsuMetrics.Domain
             }
         }
 
+        public bool HasAnyCombat()
+        {
+            lock (_gate)
+            {
+                return _activeCombat != null || _completedCombats.Count > 0;
+            }
+        }
+
         public void SetActiveCombat(MutableCombatSession combat)
         {
             ArgumentNullException.ThrowIfNull(combat);
@@ -100,16 +108,29 @@ namespace STS2RitsuMetrics.Domain
 
         public RunSnapshot Snapshot(bool includeEvents)
         {
-            return Snapshot(includeEvents, true);
+            return Snapshot(includeEvents, true, false);
         }
 
         internal RunSnapshot Snapshot(bool includeEvents, bool includeTimeline)
         {
+            return Snapshot(includeEvents, includeTimeline, false);
+        }
+
+        internal RunSnapshot SnapshotForLiveView()
+        {
+            return Snapshot(true, true, true);
+        }
+
+        private RunSnapshot Snapshot(bool includeEvents, bool includeTimeline, bool reuseCompletedCombats)
+        {
             lock (_gate)
             {
                 var combats = new List<CombatSnapshot>(_completedCombats.Count + (_activeCombat == null ? 0 : 1));
-                combats.AddRange(_completedCombats.Select(c =>
-                    SnapshotCloner.Clone(c, includeEvents, includeTimeline)));
+                if (reuseCompletedCombats)
+                    combats.AddRange(_completedCombats);
+                else
+                    combats.AddRange(_completedCombats.Select(combat =>
+                        SnapshotCloner.Clone(combat, includeEvents, includeTimeline)));
                 if (_activeCombat != null)
                     combats.Add(_activeCombat.Snapshot(includeEvents, includeTimeline));
                 return new(RunId, StartedAtUtc, EndedAtUtc, IsMultiplayer, IsDaily, IsVictory, IsAbandoned,
