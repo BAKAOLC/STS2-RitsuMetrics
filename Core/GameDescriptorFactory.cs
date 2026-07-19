@@ -27,6 +27,10 @@ namespace STS2RitsuMetrics.Core
             new("creature:unknown", AnalyticsEntityKind.Unknown, null, "unknown", "unknown");
 
         private static SourceDescriptor? _environmentSource;
+        private static SourceDescriptor? _damageFloorSource;
+        private static SourceDescriptor? _blockResolutionSource;
+        private static SourceDescriptor? _damageQuantizationSource;
+        private static SourceDescriptor? _overkillResolutionSource;
         private static SourceDescriptor? _unknownSource;
 
         static GameDescriptorFactory()
@@ -121,6 +125,30 @@ namespace STS2RitsuMetrics.Core
             return _environmentSource ??= new("system:environment", AnalyticsSourceKind.System,
                 "environment",
                 ModLocalization.Get("source.environment", "Environment"));
+        }
+
+        internal static SourceDescriptor DamageFloor()
+        {
+            return _damageFloorSource ??= new("system:damage-floor", AnalyticsSourceKind.System,
+                "damage-floor", ModLocalization.Get("source.damageFloor", "Damage floor"));
+        }
+
+        internal static SourceDescriptor BlockResolution()
+        {
+            return _blockResolutionSource ??= new("system:block-resolution", AnalyticsSourceKind.System,
+                "block-resolution", ModLocalization.Get("source.blockResolution", "Block absorption"));
+        }
+
+        internal static SourceDescriptor DamageQuantization()
+        {
+            return _damageQuantizationSource ??= new("system:damage-quantization", AnalyticsSourceKind.System,
+                "damage-quantization", ModLocalization.Get("source.damageQuantization", "Integer HP settlement"));
+        }
+
+        internal static SourceDescriptor OverkillResolution()
+        {
+            return _overkillResolutionSource ??= new("system:overkill-resolution", AnalyticsSourceKind.System,
+                "overkill-resolution", ModLocalization.Get("source.overkillResolution", "HP limit"));
         }
 
         internal static SourceDescriptor Unknown()
@@ -227,6 +255,10 @@ namespace STS2RitsuMetrics.Core
         private static void ClearLocalizedSourceCaches()
         {
             _environmentSource = null;
+            _damageFloorSource = null;
+            _blockResolutionSource = null;
+            _damageQuantizationSource = null;
+            _overkillResolutionSource = null;
             _unknownSource = null;
             PlayerDescriptors.Clear();
             CreatureDescriptors.Clear();

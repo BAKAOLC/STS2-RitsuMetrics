@@ -28,6 +28,22 @@ namespace STS2RitsuMetrics.Ui
             return ModLocalization.Get($"damage.stage.{stage}", stage.ToString());
         }
 
+        public static string ContributionSource(DamageContribution contribution)
+        {
+            return DamageContributionSemantics.GetSettlementKind(contribution) switch
+            {
+                DamageSettlementKind.LowerBound =>
+                    ModLocalization.Get("source.damageFloor", "Damage floor"),
+                DamageSettlementKind.Block =>
+                    ModLocalization.Get("source.blockResolution", "Block absorption"),
+                DamageSettlementKind.Quantization =>
+                    ModLocalization.Get("source.damageQuantization", "Integer HP settlement"),
+                DamageSettlementKind.Overkill =>
+                    ModLocalization.Get("source.overkillResolution", "HP limit"),
+                _ => contribution.Source.DisplayName,
+            };
+        }
+
         public static string AttributionConfidence(AttributionConfidence confidence)
         {
             return ModLocalization.Get($"attribution.confidence.{confidence}", confidence.ToString());
@@ -87,10 +103,13 @@ namespace STS2RitsuMetrics.Ui
                 "attack.end" => Text("timeline.action.attackEnd", "{0}'s {1} finished: {2} total damage", actor,
                     source, value),
                 "damage" => DamageDescription(timelineEvent, source, target),
+                "damage.modifier" when TimelineSettlementKind(timelineEvent) != DamageSettlementKind.None =>
+                    SettlementDescription(timelineEvent),
                 "damage.modifier" => Text("timeline.action.damageModifier",
                     "{0} modified damage: {1} → {2} ({3}, {4})", source,
                     Detail(timelineEvent, "input"), Detail(timelineEvent, "output"),
                     ContributionStageName(Detail(timelineEvent, "stage")), Signed(timelineEvent.Value)),
+                "damage.settlement" => SettlementDescription(timelineEvent),
                 "block.gain" => Text("timeline.action.blockGain", "{0} gained {1} Block from {2}", target,
                     value, source),
                 "power.change" => PowerDescription(timelineEvent, actor, target, source, causalSource),
@@ -182,6 +201,50 @@ namespace STS2RitsuMetrics.Ui
                 : Text("timeline.action.damage", "{0} dealt {1} damage to {2} (HP {3}, Block {4})", source,
                     Format(damage.HpLost + damage.BlockedAmount), target, Format(damage.HpLost),
                     Format(damage.BlockedAmount));
+        }
+
+        private static string SettlementDescription(CombatTimelineEvent timelineEvent)
+        {
+            var kind = TimelineSettlementKind(timelineEvent);
+            var name = kind switch
+            {
+                DamageSettlementKind.LowerBound => ModLocalization.Get("source.damageFloor", "Damage floor"),
+                DamageSettlementKind.Block => ModLocalization.Get("source.blockResolution", "Block absorption"),
+                DamageSettlementKind.Quantization =>
+                    ModLocalization.Get("source.damageQuantization", "Integer HP settlement"),
+                DamageSettlementKind.Overkill => ModLocalization.Get("source.overkillResolution", "HP limit"),
+                _ => timelineEvent.Source?.DisplayName ?? timelineEvent.DisplayText,
+            };
+            return Text("timeline.action.damageSettlement", "{0}: {1} → {2} ({3})", name,
+                Detail(timelineEvent, "input"), Detail(timelineEvent, "output"), Signed(timelineEvent.Value));
+        }
+
+        private static DamageSettlementKind TimelineSettlementKind(CombatTimelineEvent timelineEvent)
+        {
+            if (Enum.TryParse<DamageSettlementKind>(Detail(timelineEvent, "settlement_kind"), out var kind))
+                return kind;
+            if (!Enum.TryParse<DamageContributionStage>(Detail(timelineEvent, "stage"), out var stage))
+                return DamageSettlementKind.None;
+            return stage switch
+            {
+                DamageContributionStage.Clamp => DamageSettlementKind.LowerBound,
+                DamageContributionStage.Block => DamageSettlementKind.Block,
+                DamageContributionStage.Quantization => DamageSettlementKind.Quantization,
+                DamageContributionStage.Overkill => DamageSettlementKind.Overkill,
+                DamageContributionStage.Additive when timelineEvent.Source?.Key == "system:environment" &&
+                                                      DecimalDetail(timelineEvent, "input") < 0m &&
+                                                      DecimalDetail(timelineEvent, "output") == 0m =>
+                    DamageSettlementKind.LowerBound,
+                _ => DamageSettlementKind.None,
+            };
+        }
+
+        private static decimal DecimalDetail(CombatTimelineEvent timelineEvent, string key)
+        {
+            return decimal.TryParse(Detail(timelineEvent, key), NumberStyles.Number, CultureInfo.InvariantCulture,
+                out var value)
+                ? value
+                : 0m;
         }
 
         private static string ContributionStageName(string value)

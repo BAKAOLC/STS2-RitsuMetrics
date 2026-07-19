@@ -1963,7 +1963,8 @@ namespace STS2RitsuMetrics.Ui
             result.Modulate = ColorOf(style.NegativeColor);
             row.AddChild(result);
             var modifierCount = damage.Contributions.Count(item =>
-                item.Stage != DamageContributionStage.Base && item.EffectiveContribution != 0m);
+                DamageContributionSemantics.GetRole(item) == DamageContributionRole.Modifier &&
+                item.RawContribution != 0m);
             var count = Label(ModLocalization.Format("dashboard.damage.modifierCount", "{0} modifiers", modifierCount),
                 style, true, Math.Max(9, style.FontSize - 2));
             count.CustomMinimumSize = new(78f, 0f);
@@ -1999,21 +2000,38 @@ namespace STS2RitsuMetrics.Ui
                     style.PositiveColor, Format(damage.BlockedAmount)),
             ], Math.Max(11, style.FontSize - 1));
             details.AddChild(stages);
-            var contributions = damage.Contributions.Where(item => item.EffectiveContribution != 0m).ToArray();
-            if (contributions.Length > 0)
+            var components = damage.Contributions.Where(item =>
+                DamageContributionSemantics.GetRole(item) != DamageContributionRole.Settlement &&
+                item.RawContribution != 0m).ToArray();
+            if (components.Length > 0)
             {
-                var heading = Label(ModLocalization.Get("dashboard.damage.contributions", "Damage modifiers"), style,
+                var heading = Label(ModLocalization.Get("dashboard.damage.components", "Damage components"), style,
                     true, Math.Max(10, style.FontSize - 1));
                 details.AddChild(heading);
                 var chart = new DashboardBarChart();
-                chart.SetData(contributions.Select(contribution => new DashboardBarDatum(
+                chart.SetData(components.Select(contribution => new DashboardBarDatum(
                     $"{DashboardLocalization.ContributionStage(contribution.Stage)} · " +
-                    contribution.Source.DisplayName,
-                    Math.Abs(contribution.EffectiveContribution),
-                    contribution.EffectiveContribution > 0m ? style.PositiveColor : style.NegativeColor,
-                    contribution.EffectiveContribution > 0m
-                        ? $"+{Format(contribution.EffectiveContribution)}"
-                        : Format(contribution.EffectiveContribution))), Math.Max(10, style.FontSize - 2));
+                    DashboardLocalization.ContributionSource(contribution),
+                    Math.Abs(contribution.RawContribution),
+                    contribution.RawContribution > 0m ? style.PositiveColor : style.NegativeColor,
+                    contribution.RawContribution > 0m
+                        ? $"+{Format(contribution.RawContribution)}"
+                        : Format(contribution.RawContribution))), Math.Max(10, style.FontSize - 2));
+                details.AddChild(chart);
+            }
+
+            var settlements = damage.Contributions.Where(item =>
+                DamageContributionSemantics.GetRole(item) == DamageContributionRole.Settlement &&
+                item.RawContribution != 0m).ToArray();
+            if (settlements.Length > 0)
+            {
+                details.AddChild(Label(ModLocalization.Get("dashboard.damage.settlements", "Outcome settlement"),
+                    style, true, Math.Max(10, style.FontSize - 1)));
+                var chart = new DashboardBarChart();
+                chart.SetData(settlements.Select(contribution => new DashboardBarDatum(
+                    DashboardLocalization.ContributionSource(contribution),
+                    Math.Abs(contribution.RawContribution), style.SecondaryTextColor,
+                    Format(contribution.RawContribution))), Math.Max(10, style.FontSize - 2));
                 details.AddChild(chart);
             }
 
@@ -2049,6 +2067,7 @@ namespace STS2RitsuMetrics.Ui
         {
             var contributions = string.Join(' ', timelineEvent.Damage?.Contributions.Select(contribution =>
                 $"{DashboardLocalization.ContributionStage(contribution.Stage)} " +
+                $"{DashboardLocalization.ContributionSource(contribution)} " +
                 $"{contribution.Source.DisplayName} {contribution.Source.ModelId}") ?? []);
             return string.Join(' ', DashboardLocalization.TimelineDescription(timelineEvent),
                 timelineEvent.Actor?.DisplayName, timelineEvent.Target?.DisplayName,

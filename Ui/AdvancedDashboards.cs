@@ -258,6 +258,8 @@ namespace STS2RitsuMetrics.Ui
             foreach (var timelineEvent in damageEvents)
             foreach (var contribution in timelineEvent.Damage!.Contributions)
             {
+                if (DamageContributionSemantics.GetRole(contribution) == DamageContributionRole.Settlement)
+                    continue;
                 if (!contributions.TryGetValue(contribution.Source.Key, out var rollup))
                 {
                     rollup = new(contribution.Source);
@@ -494,10 +496,13 @@ namespace STS2RitsuMetrics.Ui
                 item => item.Name);
             var contributions = damageEvents.SelectMany(item => item.Damage!.Contributions).ToArray();
             AddMaximum(records, "analysis.recordAmplifier", "Largest amplification", contributions
-                .Where(item => item.EffectiveContribution > 0m && item.Stage != DamageContributionStage.Base)
+                .Where(item => item.EffectiveContribution > 0m &&
+                               DamageContributionSemantics.GetRole(item) == DamageContributionRole.Modifier)
                 .ToArray(), item => item.EffectiveContribution, item => item.Source.DisplayName);
             AddMaximum(records, "analysis.recordMitigator", "Largest mitigation", contributions
-                    .Where(item => item.EffectiveContribution < 0m).ToArray(), item => -item.EffectiveContribution,
+                    .Where(item => item.EffectiveContribution < 0m &&
+                                   DamageContributionSemantics.GetRole(item) == DamageContributionRole.Modifier)
+                    .ToArray(), item => -item.EffectiveContribution,
                 item => item.Source.DisplayName);
             var blocks = combats.SelectMany(combat => combat.Players.Select(player => new NamedValue(
                 player.DisplayName, Metric(player, MetricIds.BlockGained)))).ToArray();

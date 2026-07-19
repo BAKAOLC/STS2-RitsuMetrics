@@ -28,6 +28,7 @@ namespace STS2RitsuMetrics.Api
         Effect,
         System,
         Custom,
+        DamageSettlement,
     }
 
     public enum TimelineEventPhase
@@ -54,6 +55,24 @@ namespace STS2RitsuMetrics.Api
         Block,
         Overkill,
         Execution,
+        Clamp,
+        Quantization,
+    }
+
+    public enum DamageContributionRole
+    {
+        Base,
+        Modifier,
+        Settlement,
+    }
+
+    public enum DamageSettlementKind
+    {
+        None,
+        LowerBound,
+        Block,
+        Quantization,
+        Overkill,
     }
 
     public enum AttributionConfidence
@@ -74,6 +93,44 @@ namespace STS2RitsuMetrics.Api
         decimal? Factor,
         AttributionConfidence Confidence,
         string Note = "");
+
+    public static class DamageContributionSemantics
+    {
+        public static DamageContributionRole GetRole(DamageContribution contribution)
+        {
+            ArgumentNullException.ThrowIfNull(contribution);
+            if (GetSettlementKind(contribution) != DamageSettlementKind.None)
+                return DamageContributionRole.Settlement;
+            return contribution.Stage is DamageContributionStage.Base or DamageContributionStage.Execution
+                ? DamageContributionRole.Base
+                : DamageContributionRole.Modifier;
+        }
+
+        public static DamageSettlementKind GetSettlementKind(DamageContribution contribution)
+        {
+            ArgumentNullException.ThrowIfNull(contribution);
+            return contribution.Stage switch
+            {
+                DamageContributionStage.Clamp => DamageSettlementKind.LowerBound,
+                DamageContributionStage.Block => DamageSettlementKind.Block,
+                DamageContributionStage.Quantization => DamageSettlementKind.Quantization,
+                DamageContributionStage.Overkill => DamageSettlementKind.Overkill,
+                DamageContributionStage.Additive when IsLegacyLowerBound(contribution) =>
+                    DamageSettlementKind.LowerBound,
+                _ => DamageSettlementKind.None,
+            };
+        }
+
+        private static bool IsLegacyLowerBound(DamageContribution contribution)
+        {
+            return contribution is
+                   {
+                       Source.Key: "system:environment", Confidence: AttributionConfidence.Derived,
+                       InputValue: < 0m, OutputValue: 0m,
+                   } &&
+                   contribution.RawContribution == -contribution.InputValue;
+        }
+    }
 
     public sealed record DamageAttributionShare(
         EntityDescriptor Contributor,

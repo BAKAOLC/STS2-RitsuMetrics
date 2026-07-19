@@ -461,7 +461,8 @@ namespace STS2RitsuMetrics.Ui
                     { Kind: CombatTimelineKind.CardPlay, Phase: TimelineEventPhase.Started }),
                 _ => events.Where(item => item.Damage != null)
                     .SelectMany(item => item.Damage!.Contributions)
-                    .Where(item => item.Stage != DamageContributionStage.Base)
+                    .Where(item => DamageContributionSemantics.GetRole(item) ==
+                                   DamageContributionRole.Modifier)
                     .Sum(item => Math.Abs(item.EffectiveContribution)),
             };
         }

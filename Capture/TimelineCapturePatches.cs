@@ -339,16 +339,9 @@ namespace STS2RitsuMetrics.Capture
         private static void DamageCalculationPostfix(decimal __result, bool __runOriginal,
             DamageCaptureHub.CalculationState? __state)
         {
-            if (__runOriginal)
-            {
-                DamageCaptureHub.CompleteCalculation(__state, __result);
-            }
-            else
-            {
-                if (__state != null)
-                    Interlocked.Increment(ref _skippedDamageCalculations);
-                DamageCaptureHub.RestoreCalculation(__state);
-            }
+            if (!__runOriginal && __state != null)
+                Interlocked.Increment(ref _skippedDamageCalculations);
+            DamageCaptureHub.CompleteCalculation(__state, __result);
         }
 
         private static Exception? DamageCalculationFinalizer(Exception? __exception,
@@ -367,16 +360,9 @@ namespace STS2RitsuMetrics.Capture
         private static void HpLossCalculationPostfix(decimal __result, bool __runOriginal,
             DamageCaptureHub.HpLossState? __state)
         {
-            if (__runOriginal)
-            {
-                DamageCaptureHub.CompleteHpLoss(__state, __result);
-            }
-            else
-            {
-                if (__state != null)
-                    Interlocked.Increment(ref _skippedHpLossCalculations);
-                DamageCaptureHub.RestoreHpLoss(__state);
-            }
+            if (!__runOriginal && __state != null)
+                Interlocked.Increment(ref _skippedHpLossCalculations);
+            DamageCaptureHub.CompleteHpLoss(__state, __result);
         }
 
         private static Exception? HpLossCalculationFinalizer(Exception? __exception,

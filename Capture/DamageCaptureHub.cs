@@ -28,6 +28,15 @@ namespace STS2RitsuMetrics.Capture
         AbstractModel Model,
         string Context);
 
+    internal sealed class HpLossPassCapture(Creature target, decimal inputValue, int modifierStartIndex)
+    {
+        internal Creature Target { get; } = target;
+        internal decimal InputValue { get; } = inputValue;
+        internal decimal OutputValue { get; set; } = inputValue;
+        internal int ModifierStartIndex { get; } = modifierStartIndex;
+        internal int ModifierEndIndex { get; set; } = modifierStartIndex;
+    }
+
     internal sealed class DamageCalculationCapture(
         Creature? target,
         Creature? dealer,
@@ -47,7 +56,37 @@ namespace STS2RitsuMetrics.Capture
         internal decimal? FinalHpLossAmount { get; set; }
         internal List<ModifierCapture> Modifiers { get; } = [];
         internal List<FactorModifierCapture> FactorModifiers { get; } = [];
-        internal bool Consumed { get; set; }
+        internal List<HpLossPassCapture> HpLossPasses { get; } = [];
+        private HashSet<Creature> ConsumedReceivers { get; } = new(ReferenceEqualityComparer.Instance);
+
+        internal bool CanConsume(Creature receiver)
+        {
+            if (ReferenceEquals(Target, receiver) && ConsumedReceivers.Count > 0)
+                return false;
+            return !ConsumedReceivers.Contains(receiver) &&
+                   (ReferenceEquals(Target, receiver) ||
+                    HpLossPasses.Any(pass => ReferenceEquals(pass.Target, receiver)));
+        }
+
+        internal DamageCalculationCapture ConsumeFor(Creature receiver)
+        {
+            ConsumedReceivers.Add(receiver);
+            var finalPassIndex = HpLossPasses.FindLastIndex(pass => ReferenceEquals(pass.Target, receiver));
+            if (finalPassIndex < 0 || finalPassIndex == HpLossPasses.Count - 1)
+                return this;
+
+            var finalPass = HpLossPasses[finalPassIndex];
+            var view = new DamageCalculationCapture(Target, Dealer, CardSource, RequestedAmount, Props, Cause)
+            {
+                CurrentValue = finalPass.OutputValue,
+                ModifiedAmount = ModifiedAmount,
+                FinalHpLossAmount = finalPass.OutputValue,
+            };
+            view.Modifiers.AddRange(Modifiers.Take(finalPass.ModifierEndIndex));
+            view.FactorModifiers.AddRange(FactorModifiers);
+            view.HpLossPasses.AddRange(HpLossPasses.Take(finalPassIndex + 1));
+            return view;
+        }
     }
 
     internal sealed class DamageRequestCapture(
@@ -189,14 +228,18 @@ namespace STS2RitsuMetrics.Capture
                 return null;
             var previous = CurrentCalculationValue.Value;
             calculation.CurrentValue = amount;
+            var pass = new HpLossPassCapture(target!, amount, calculation.Modifiers.Count);
+            calculation.HpLossPasses.Add(pass);
             CurrentCalculationValue.Value = calculation;
-            return new(calculation, previous);
+            return new(calculation, pass, previous);
         }
 
         internal static void CompleteHpLoss(HpLossState? state, decimal result)
         {
             if (state == null)
                 return;
+            state.Pass.OutputValue = result;
+            state.Pass.ModifierEndIndex = state.Calculation.Modifiers.Count;
             state.Calculation.FinalHpLossAmount = result;
             state.Calculation.CurrentValue = result;
             RestoreHpLoss(state);
@@ -325,14 +368,16 @@ namespace STS2RitsuMetrics.Capture
             lock (request.Calculations)
             {
                 calculation = request.Calculations.FirstOrDefault(candidate =>
-                    !candidate.Consumed && ReferenceEquals(candidate.Target, receiver) && candidate.Props == props);
+                    candidate.CanConsume(receiver) && ReferenceEquals(candidate.Target, receiver) &&
+                    candidate.Props == props);
                 calculation ??= request.Calculations.FirstOrDefault(candidate =>
-                    !candidate.Consumed && candidate.Props == props && ReferenceEquals(candidate.Dealer, dealer) &&
+                    candidate.CanConsume(receiver) && candidate.Props == props &&
+                    ReferenceEquals(candidate.Dealer, dealer) &&
                     ReferenceEquals(candidate.CardSource, cardSource));
-                calculation ??= request.Calculations.FirstOrDefault(candidate => !candidate.Consumed);
+                calculation ??= request.Calculations.FirstOrDefault(candidate => candidate.CanConsume(receiver));
                 if (calculation == null)
                     return false;
-                calculation.Consumed = true;
+                calculation = calculation.ConsumeFor(receiver);
                 return true;
             }
         }
@@ -433,6 +478,7 @@ namespace STS2RitsuMetrics.Capture
 
         internal sealed record HpLossState(
             DamageCalculationCapture Calculation,
+            HpLossPassCapture Pass,
             DamageCalculationCapture? Previous);
     }
 }
