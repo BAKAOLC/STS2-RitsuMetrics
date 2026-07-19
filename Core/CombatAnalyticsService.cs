@@ -18,6 +18,7 @@ using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.ValueProps;
 using STS2RitsuLib;
+using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Capture;
 using STS2RitsuMetrics.Data;
@@ -85,12 +86,12 @@ namespace STS2RitsuMetrics.Core
 
         internal void Initialize()
         {
-            MetricsRepository.ReconcileLegacyMultiplayerRuns();
             CaptureBridge.IsCombatActive = () => _captureActive;
             CaptureBridge.FallbackParentResolver = () => _activeTurnEventId;
             CaptureBridge.EffectMaterialized = OnEffectMaterialized;
             CaptureBridge.DamageRequestCompleted = OnDamageRequestCompleted;
 
+            Subscribe<ProfileDataReadyEvent>(_ => MetricsRepository.ReconcileLegacyMultiplayerRuns());
             Subscribe<RunStartedEvent>(evt =>
                 StartNewRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc));
             Subscribe<GameReadyEvent>(_ => TimelineCapturePatches.RefreshModelPatches());
