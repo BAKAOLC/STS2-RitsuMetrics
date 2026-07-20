@@ -311,7 +311,7 @@ namespace STS2RitsuMetrics.Ui
             var combats = run.Combats.OrderBy(combat => combat.StartedAtUtc).ToArray();
             var points = combats.Select((combat, index) => new DashboardLineDatum(
                 ModLocalization.Format("analysis.floorShort", "F{0}", combat.Floor),
-                TurnValue(Timeline(combat), definition.Section),
+                CombatTrendValue(combat, definition),
                 ModLocalization.Format("analysis.runTrendPoint", "#{0} · Act {1} · {2} · {3} rounds",
                     index + 1, combat.ActIndex + 1, combat.EncounterName, combat.RoundCount))).ToArray();
             if (points.All(point => point.Value <= 0m))
@@ -327,6 +327,21 @@ namespace STS2RitsuMetrics.Ui
             }
 
             return Surface(body, style, Accent(style, definition.AccentIndex));
+        }
+
+        private static decimal CombatTrendValue(
+            CombatSnapshot combat,
+            OverviewSectionDefinition definition)
+        {
+            return definition.Section switch
+            {
+                OverviewSection.Offense => combat.Players.Sum(player =>
+                    MetricForDisplay(player, MetricIds.DamageDealt)),
+                OverviewSection.Defense => combat.Players.Sum(player =>
+                    SnapshotStatistics.Survival(combat, player.PlayerNetId).PlayerHpLost +
+                    MetricForDisplay(player, MetricIds.DamageBlocked)),
+                _ => combat.Players.Sum(player => MetricForDisplay(player, definition.PrimaryMetric)),
+            };
         }
 
         private static Control BuildCombatRecords(CombatSnapshot snapshot, DashboardStyleDefinition style)
