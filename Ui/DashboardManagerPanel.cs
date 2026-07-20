@@ -150,11 +150,11 @@ namespace STS2RitsuMetrics.Ui
             };
             title.AddThemeFontSizeOverride("font_size", DashboardControlTheme.SectionTitleFontSize);
             header.AddChild(title);
-            var settings = SmallButton("⚙",
+            var settings = SmallButton(DashboardIcon.Settings,
                 ModLocalization.Get("dashboard.openSettings", "Open RitsuMetrics settings"));
             settings.Pressed += OpenSettings;
             header.AddChild(settings);
-            var close = SmallButton("×", ModLocalization.Get("dialog.close", "Close"),
+            var close = SmallButton(DashboardIcon.Close, ModLocalization.Get("dialog.close", "Close"),
                 DashboardButtonKind.Danger);
             close.Pressed += () =>
             {
@@ -269,23 +269,25 @@ namespace STS2RitsuMetrics.Ui
             identity.AddChild(status);
             row.AddChild(identity);
 
-            var focus = SmallButton("◎", ModLocalization.Get("dashboard.focus", "Focus"));
+            var focus = SmallButton(DashboardIcon.Focus, ModLocalization.Get("dashboard.focus", "Focus"));
             focus.Pressed += () => _host.FocusWindow(info.InstanceId);
             row.AddChild(focus);
-            var configure = SmallButton("✎", ModLocalization.Get("dashboard.configure", "Configure"));
+            var configure = SmallButton(DashboardIcon.Configure,
+                ModLocalization.Get("dashboard.configure", "Configure"));
             configure.Pressed += () => _configuration.OpenEdit(info);
             row.AddChild(configure);
-            var reset = SmallButton("↺",
+            var reset = SmallButton(DashboardIcon.ResetGeometry,
                 ModLocalization.Get("dashboard.resetWindowGeometry", "Reset position and size"));
             reset.Pressed += () => _host.ResetWindowGeometry(info.InstanceId);
             row.AddChild(reset);
-            var lockButton = SmallButton(info.IsLocked ? "●" : "○",
+            var lockButton = SmallButton(info.IsLocked ? DashboardIcon.Unlock : DashboardIcon.Lock,
                 info.IsLocked
                     ? ModLocalization.Get("overlay.unlock", "Unlock position and size")
                     : ModLocalization.Get("overlay.lock", "Lock position and size"));
             lockButton.Pressed += () => _host.ToggleWindowLock(info.InstanceId);
             row.AddChild(lockButton);
-            var duplicate = SmallButton("＋", ModLocalization.Get("dashboard.duplicate", "Duplicate"));
+            var duplicate = SmallButton(DashboardIcon.Duplicate,
+                ModLocalization.Get("dashboard.duplicate", "Duplicate"));
             duplicate.Pressed += () =>
             {
                 var instanceId = _host.OpenWindow(info.DashboardId, new()
@@ -298,7 +300,7 @@ namespace STS2RitsuMetrics.Ui
                     _host.FocusWindow(instanceId);
             };
             row.AddChild(duplicate);
-            var close = SmallButton("×", ModLocalization.Get("dialog.close", "Close"),
+            var close = SmallButton(DashboardIcon.Close, ModLocalization.Get("dialog.close", "Close"),
                 DashboardButtonKind.Danger);
             close.Pressed += () => _host.CloseWindow(info.InstanceId);
             row.AddChild(close);
@@ -378,18 +380,18 @@ namespace STS2RitsuMetrics.Ui
             }
         }
 
-        private static Button SmallButton(string text, string tooltip,
+        private static Button SmallButton(DashboardIcon icon, string tooltip,
             DashboardButtonKind kind = DashboardButtonKind.Subtle)
         {
             var button = new Button
             {
-                Text = text,
                 TooltipText = tooltip,
                 CustomMinimumSize = new(38f, 38f),
                 SizeFlagsVertical = SizeFlags.ShrinkCenter,
                 FocusMode = FocusModeEnum.None,
             };
             DashboardControlTheme.ApplyIconButton(button, kind, compact: true);
+            DashboardIcons.ApplyIconOnly(button, icon);
             return button;
         }
 

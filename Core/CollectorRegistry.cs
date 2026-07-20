@@ -30,15 +30,15 @@ namespace STS2RitsuMetrics.Core
 
         internal void RegisterBuiltIns()
         {
-            Register(new(MetricIds.DamageDealt, "metric.damageDealt", "Damage dealt",
+            Register(new(MetricIds.DamageDealt, "metric.damageDealt", "Applied damage (AD)",
                 MetricValueKind.Amount,
                 "damage"));
-            Register(new(MetricIds.DamageContribution, "metric.damageContribution", "Damage contribution",
+            Register(new(MetricIds.DamageContribution, "metric.damageContribution", "Responsibility damage (RD)",
                 MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.EffectiveHpDamageDealt, "metric.effectiveHpDamageDealt",
-                "Effective HP reduction (AD)", MetricValueKind.Amount, "damage"));
+                "HP damage (HP-AD)", MetricValueKind.Amount, "damage"));
             Register(new(MetricIds.EffectiveHpDamageContribution, "metric.effectiveHpDamageContribution",
-                "Effective HP reduction (RD)", MetricValueKind.Amount, "contribution"));
+                "HP attribution (HP-RD)", MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.DamageTaken, "metric.damageTaken", "Damage taken",
                 MetricValueKind.Amount, "damage",
                 false));
@@ -58,9 +58,9 @@ namespace STS2RitsuMetrics.Core
                 MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.Overkill, "metric.overkill", "Overkill", MetricValueKind.Amount,
                 "damage"));
-            Register(new(MetricIds.DamageAmplified, "metric.damageAmplified", "Damage amplified",
+            Register(new(MetricIds.DamageAmplified, "metric.damageAmplified", "Damage amplification share",
                 MetricValueKind.Amount, "damage"));
-            Register(new(MetricIds.DamageMitigated, "metric.damageMitigated", "Damage mitigated",
+            Register(new(MetricIds.DamageMitigated, "metric.damageMitigated", "Damage reduced",
                 MetricValueKind.Amount, "damage"));
             Register(
                 new(MetricIds.BlockGained, "metric.blockGained", "Block gained", MetricValueKind.Amount,

@@ -206,6 +206,13 @@ namespace STS2RitsuMetrics.Capture
                 .Where(method => method.IsVirtual && method.ReturnType == typeof(Task))
                 .Select(method => method.GetBaseDefinition())
                 .ToHashSet();
+            var orbHooks = typeof(OrbModel)
+                .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => method.IsVirtual && typeof(Task).IsAssignableFrom(method.ReturnType))
+                .Where(method => method.Name is nameof(OrbModel.BeforeTurnEndOrbTrigger) or nameof(OrbModel.Passive)
+                    or nameof(OrbModel.Evoke))
+                .Select(method => method.GetBaseDefinition())
+                .ToHashSet();
             var modelPrefix = CapturePatchMethod(nameof(ModelHookPrefix), Priority.First);
             var modelPostfix = CapturePatchMethod(nameof(ModelHookPostfix), Priority.Last);
             var modelFinalizer = CapturePatchMethod(nameof(ModelHookFinalizer), Priority.Last);
@@ -221,7 +228,8 @@ namespace STS2RitsuMetrics.Capture
             {
                 if (method.IsAbstract || method.ContainsGenericParameters)
                     continue;
-                if (method.ReturnType == typeof(Task) && baseHooks.Contains(method.GetBaseDefinition()))
+                if (typeof(Task).IsAssignableFrom(method.ReturnType) &&
+                    (baseHooks.Contains(method.GetBaseDefinition()) || orbHooks.Contains(method.GetBaseDefinition())))
                 {
                     if (!PatchedModelMethods.Add(method))
                         continue;

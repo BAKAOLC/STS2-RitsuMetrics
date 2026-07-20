@@ -60,11 +60,12 @@ namespace STS2RitsuMetrics.Ui
             Register(registry, BuiltInDashboardIds.Meter, "dashboard.meter", "Metric meter",
                 "Per-player meter with source breakdown", 400f, 360f, () => new MetricMeterRenderer());
             Register(registry, BuiltInDashboardIds.DamageContribution, "dashboard.damageContribution",
-                "Damage dealt (RD)", "RD attribution of damage dealt to HP or Block", 400f,
+                "Responsibility damage (RD)",
+                "Applied HP + Block damage redistributed among base damage and positive modifiers", 400f,
                 360f, () => new MetricMeterRenderer(MetricIds.DamageContribution));
             Register(registry, BuiltInDashboardIds.EffectiveHpDamageContribution,
-                "dashboard.effectiveHpDamageContribution", "Effective HP reduction (RD)",
-                "RD attribution of damage that reduced HP", 400f, 360f,
+                "dashboard.effectiveHpDamageContribution", "HP attribution (HP-RD)",
+                "Applied HP damage redistributed among base damage and positive modifiers", 400f, 360f,
                 () => new MetricMeterRenderer(MetricIds.EffectiveHpDamageContribution));
             Register(registry, BuiltInDashboardIds.DefenseContribution, "dashboard.defenseContribution",
                 "Defense contribution", "Effective mitigation, consumed block and healing by contributor", 400f,
@@ -148,6 +149,7 @@ namespace STS2RitsuMetrics.Ui
         private readonly Label _footerContext;
         private string _compactFooterContext = string.Empty;
         private string _fullFooterContext = string.Empty;
+        private Action? _scopeToggle;
 
         protected DashboardRendererBase()
         {
@@ -162,7 +164,11 @@ namespace STS2RitsuMetrics.Ui
             Toolbar.AddThemeConstantOverride("separation", 6);
             View.AddChild(Toolbar);
             Scroll = new();
-            Rows = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            Rows = new()
+            {
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                SizeFlagsVertical = Control.SizeFlags.ShrinkBegin,
+            };
             Rows.AddThemeConstantOverride("separation", 4);
             Scroll.SetContent(Rows);
             View.AddChild(Scroll);
@@ -184,6 +190,19 @@ namespace STS2RitsuMetrics.Ui
                 HorizontalAlignment = HorizontalAlignment.Right,
                 ClipText = true,
                 TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+                MouseFilter = Control.MouseFilterEnum.Stop,
+                MouseDefaultCursorShape = Control.CursorShape.PointingHand,
+            };
+            _footerContext.GuiInput += input =>
+            {
+                if (input is not InputEventMouseButton
+                    {
+                        Pressed: true,
+                        ButtonIndex: MouseButton.Left or MouseButton.Right,
+                    })
+                    return;
+                _scopeToggle?.Invoke();
+                _footerContext.AcceptEvent();
             };
             _footer.AddChild(_footerContext);
             View.AddChild(_footer);
@@ -211,6 +230,10 @@ namespace STS2RitsuMetrics.Ui
             _footerContext.Modulate = ColorOf(context.Style.SecondaryTextColor);
             CompactSubtitle = null;
             Render(context);
+            Rows.CustomMinimumSize = new(Rows.CustomMinimumSize.X, 0f);
+            Rows.ResetSize();
+            Rows.UpdateMinimumSize();
+            Scroll.InvalidateContentSize();
         }
 
         public void Dispose()
@@ -227,6 +250,13 @@ namespace STS2RitsuMetrics.Ui
         public string? Title { get; protected set; }
         public string? Subtitle { get; protected set; }
         public string? AccentColor { get; protected set; }
+
+        internal void SetScopeToggle(Action toggle)
+        {
+            _scopeToggle = toggle;
+            _footerContext.TooltipText = ModLocalization.Get("dashboard.toggleScope",
+                "Left- or right-click to switch between current combat and current run");
+        }
 
         public void SetFooterContext(string? text, string? compactText)
         {
@@ -364,6 +394,60 @@ namespace STS2RitsuMetrics.Ui
         protected static decimal Metric(PlayerMetricSnapshot player, string id)
         {
             return player.Totals.GetValueOrDefault(id);
+        }
+
+        protected static decimal MetricForDisplay(PlayerMetricSnapshot player, string id)
+        {
+            if (player.Totals.TryGetValue(id, out var value))
+                return value;
+            return id switch
+            {
+                MetricIds.DamageContribution => Metric(player, MetricIds.DamageDealt),
+                MetricIds.EffectiveHpDamageDealt => Metric(player, MetricIds.DamageDealt),
+                MetricIds.EffectiveHpDamageContribution => player.Totals.TryGetValue(
+                    MetricIds.EffectiveHpDamageDealt, out var hpDamage)
+                    ? hpDamage
+                    : Metric(player, MetricIds.DamageDealt),
+                _ => 0m,
+            };
+        }
+
+        protected static IReadOnlyList<SourceMetricSnapshot> MetricSourcesForDisplay(
+            PlayerMetricSnapshot player,
+            string id)
+        {
+            if (player.Sources.TryGetValue(id, out var sources))
+                return sources;
+            var fallbackId = id switch
+            {
+                MetricIds.DamageContribution => MetricIds.DamageDealt,
+                MetricIds.EffectiveHpDamageDealt => MetricIds.DamageDealt,
+                MetricIds.EffectiveHpDamageContribution when player.Sources.ContainsKey(
+                    MetricIds.EffectiveHpDamageDealt) => MetricIds.EffectiveHpDamageDealt,
+                MetricIds.EffectiveHpDamageContribution => MetricIds.DamageDealt,
+                _ => string.Empty,
+            };
+            return string.IsNullOrEmpty(fallbackId)
+                ? []
+                : player.Sources.GetValueOrDefault(fallbackId) ?? [];
+        }
+
+        protected static SourceMetricSnapshot PresentSource(
+            PlayerMetricSnapshot player,
+            SourceMetricSnapshot source)
+        {
+            if (source.SourceKind != AnalyticsSourceKind.Creature ||
+                !string.Equals(player.CharacterId, "DEFECT", StringComparison.OrdinalIgnoreCase) ||
+                (!string.Equals(source.ModelId, player.CharacterId, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(source.DisplayName, player.DisplayName, StringComparison.CurrentCulture)))
+                return source;
+            return source with
+            {
+                SourceKey = $"legacy-orb:{player.PlayerKey}",
+                SourceKind = AnalyticsSourceKind.Orb,
+                ModelId = "LEGACY_UNKNOWN_ORB",
+                DisplayName = ModLocalization.Get("source.legacyUnknownOrb", "Unidentified orb (legacy record)"),
+            };
         }
 
         protected static string Accent(DashboardStyleDefinition style, int index)
@@ -798,9 +882,9 @@ namespace STS2RitsuMetrics.Ui
         {
             var empty = new VBoxContainer { CustomMinimumSize = new(0, 112) };
             empty.AddThemeConstantOverride("separation", 4);
-            var glyph = Label("◇", context.Style, false, context.Style.FontSize + 16);
-            glyph.Modulate = ColorOf(context.Style.WarningColor);
-            glyph.HorizontalAlignment = HorizontalAlignment.Center;
+            var glyph = DashboardIcons.View(DashboardIcon.NoData, context.Style.FontSize + 16,
+                ColorOf(context.Style.WarningColor));
+            glyph.SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter;
             empty.AddChild(glyph);
             var title = Label(ModLocalization.Get("dashboard.noData", text), context.Style, false,
                 context.Style.FontSize + 2);
@@ -915,10 +999,11 @@ namespace STS2RitsuMetrics.Ui
             decimal total)
         {
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
+            var backText = ModLocalization.Get("dashboard.backToRanking", "Team ranking");
             var back = new Button
             {
-                Text = singleLine ? "‹" : ModLocalization.Get("dashboard.backToRanking", "← Team ranking"),
-                TooltipText = ModLocalization.Get("dashboard.backToRanking", "← Team ranking"),
+                Text = singleLine ? string.Empty : backText,
+                TooltipText = backText,
                 Alignment = singleLine ? HorizontalAlignment.Center : HorizontalAlignment.Left,
                 FocusMode = Control.FocusModeEnum.None,
             };
@@ -926,6 +1011,7 @@ namespace STS2RitsuMetrics.Ui
                 DashboardControlTheme.ApplyIconButton(back, compact: true);
             else
                 DashboardControlTheme.ApplyButton(back, DashboardButtonKind.Subtle);
+            DashboardIcons.Apply(back, DashboardIcon.Back);
             back.Pressed += () =>
             {
                 _selectedPlayerKey = null;
@@ -1665,13 +1751,14 @@ namespace STS2RitsuMetrics.Ui
                 var collapsed = _collapsed.Contains(timelineEvent.EventId);
                 var toggle = new Button
                 {
-                    Text = collapsed ? "▸" : "▾",
                     TooltipText = ModLocalization.Format(collapsed
                             ? "timeline.branch.expand"
                             : "timeline.branch.collapse",
                         collapsed ? "Expand {0} linked events" : "Collapse {0} linked events", descendantCount),
                 };
                 DashboardControlTheme.ApplyIconButton(toggle, DashboardButtonKind.Subtle, style, true);
+                DashboardIcons.ApplyIconOnly(toggle,
+                    collapsed ? DashboardIcon.Expand : DashboardIcon.Collapse, 17);
                 toggle.Pressed += () => ToggleBranch(timelineEvent.EventId);
                 row.AddChild(toggle);
             }
@@ -1933,9 +2020,8 @@ namespace STS2RitsuMetrics.Ui
             var damage = timelineEvent.Damage!;
             var row = new HBoxContainer { CustomMinimumSize = new(0f, style.RowHeight + 3f) };
             row.AddThemeConstantOverride("separation", 8);
-            var chevron = Label(expanded ? "▾" : "▸", style, true, style.FontSize + 1);
-            chevron.CustomMinimumSize = new(18f, 0f);
-            chevron.VerticalAlignment = VerticalAlignment.Center;
+            var chevron = DashboardIcons.View(expanded ? DashboardIcon.Collapse : DashboardIcon.Expand, 18f,
+                ColorOf(style.SecondaryTextColor));
             row.AddChild(chevron);
             var turn = Label($"T{timelineEvent.TurnIndex}", style, true, Math.Max(10, style.FontSize - 1));
             turn.CustomMinimumSize = new(38f, 0f);

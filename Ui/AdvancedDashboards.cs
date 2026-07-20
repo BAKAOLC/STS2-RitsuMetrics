@@ -121,17 +121,42 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var sources = AggregateSources(snapshot.Players).OrderByDescending(SourceScore).Take(250).ToArray();
+            var sources = AggregateSources(snapshot.Players, true)
+                .Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m ||
+                                 SourceMetric(source, MetricIds.DamageContribution) > 0m)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution))
+                .ThenByDescending(source => SourceMetric(source, MetricIds.DamageDealt))
+                .Take(250).ToArray();
             if (sources.Length == 0)
             {
                 Empty(context, ModLocalization.Get("analysis.noSources", "No source data"));
                 return;
             }
 
-            var maximum = Math.Max(1m, sources.Max(SourceScore));
-            Rows.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources", "Top sources"),
-                sources.Take(12).Select(source => new DashboardBarDatum(source.Name, SourceScore(source),
-                    SourceColor(source.Kind, context.Style), Format(SourceScore(source)))), context.Style));
+            var charts = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            charts.AddThemeConstantOverride("h_separation", 8);
+            charts.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources.ad", "Top AD sources"),
+                sources.Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m)
+                    .OrderByDescending(source => SourceMetric(source, MetricIds.DamageDealt)).Take(12)
+                    .Select(source => new DashboardBarDatum(source.Name,
+                        SourceMetric(source, MetricIds.DamageDealt), SourceColor(source.Kind, context.Style),
+                        Format(SourceMetric(source, MetricIds.DamageDealt)))), context.Style));
+            charts.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources.rd", "Top RD sources"),
+                sources.Where(source => SourceMetric(source, MetricIds.DamageContribution) > 0m)
+                    .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution)).Take(12)
+                    .Select(source => new DashboardBarDatum(source.Name,
+                        SourceMetric(source, MetricIds.DamageContribution), SourceColor(source.Kind, context.Style),
+                        Format(SourceMetric(source, MetricIds.DamageContribution)))), context.Style));
+            Rows.AddChild(charts);
+            var offenseMetrics = new[]
+            {
+                MetricIds.DamageDealt,
+                MetricIds.DamageContribution,
+                MetricIds.DamageAmplified,
+                MetricIds.Overkill,
+            };
+            var maximum = Math.Max(1m, sources.SelectMany(source => offenseMetrics.Select(metricId =>
+                Math.Abs(SourceMetric(source, metricId)))).DefaultIfEmpty().Max());
             AddSection(ModLocalization.Get("analysis.sourceDetails", "Source details"), Accent(context.Style, 1),
                 context.Style, true);
             foreach (var source in sources)
@@ -140,17 +165,21 @@ namespace STS2RitsuMetrics.Ui
                 var content = new VBoxContainer();
                 content.AddThemeConstantOverride("separation", 4);
                 content.AddChild(SourceHeader(source, color, context.Style));
-                var metrics = source.Totals.Where(pair => pair.Value != 0m)
-                    .OrderByDescending(pair => Math.Abs(pair.Value)).Take(6).ToArray();
+                var metrics = offenseMetrics.Select(metricId => (MetricId: metricId,
+                        Value: SourceMetric(source, metricId)))
+                    .Where(metric => metric.Value != 0m).ToArray();
                 foreach (var (metricId, value) in metrics)
-                    content.AddChild(Meter(MetricName(metricId), $"{Format(value)}  ·  ×{source.Occurrences[metricId]}",
+                    content.AddChild(Meter(MetricName(metricId),
+                        $"{Format(value)}  ·  ×{source.Occurrences.GetValueOrDefault(metricId)}",
                         Math.Abs(value), maximum, MetricColor(metricId, context.Style), context.Style,
                         Math.Max(23, context.Style.RowHeight - 7)));
                 Rows.AddChild(Surface(content, context.Style, color));
             }
 
-            Status.Text = ModLocalization.Format("analysis.sourceSummary", "{0} sources across {1} players",
-                sources.Length, snapshot.Players.Count);
+            Status.Text = ModLocalization.Format("analysis.sourceSummary",
+                "{0} sources · {1} players · AD {2} · RD {3}", sources.Length, snapshot.Players.Count,
+                Format(snapshot.Players.Sum(player => MetricForDisplay(player, MetricIds.DamageDealt))),
+                Format(snapshot.Players.Sum(player => MetricForDisplay(player, MetricIds.DamageContribution))));
         }
 
         private void RenderDefense(DashboardRenderContext context)
@@ -253,38 +282,44 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var damageEvents = Timeline(snapshot).Where(IsPlayerOffenseEvent).ToArray();
+            var observations = snapshot.Events.Where(observation =>
+                    observation.MetricId == MetricIds.DamageContribution &&
+                    observation.Tags.TryGetValue(ObservationTagIds.ContributionComponent, out var component) &&
+                    component is ContributionComponentIds.DamageAmplification or ContributionComponentIds.Execution)
+                .ToArray();
             var contributions = new Dictionary<string, ContributionRollup>(StringComparer.Ordinal);
-            foreach (var timelineEvent in damageEvents)
-            foreach (var contribution in timelineEvent.Damage!.Contributions)
+            foreach (var observation in observations)
             {
-                if (DamageContributionSemantics.GetRole(contribution) == DamageContributionRole.Settlement)
-                    continue;
-                if (!contributions.TryGetValue(contribution.Source.Key, out var rollup))
+                var key = $"{observation.Subject.Key}\0{observation.Source.Key}";
+                if (!contributions.TryGetValue(key, out var rollup))
                 {
-                    rollup = new(contribution.Source);
-                    contributions.Add(contribution.Source.Key, rollup);
+                    rollup = new(observation.Subject, observation.Source);
+                    contributions.Add(key, rollup);
                 }
 
                 rollup.Events++;
-                rollup.Raw += contribution.RawContribution;
-                if (contribution.Stage == DamageContributionStage.Base)
-                    rollup.Direct += Math.Max(0m, contribution.EffectiveContribution);
-                else if (contribution.EffectiveContribution > 0m)
-                    rollup.Enabled += contribution.EffectiveContribution;
+                var component = observation.Tags[ObservationTagIds.ContributionComponent];
+                if (component == ContributionComponentIds.Execution)
+                    rollup.Execution += observation.Value;
                 else
-                    rollup.Prevented += -contribution.EffectiveContribution;
-                if (contribution.Stage == DamageContributionStage.Execution)
-                    rollup.Execution += Math.Max(0m, contribution.EffectiveContribution);
-                if (contribution.Confidence > rollup.Confidence)
-                    rollup.Confidence = contribution.Confidence;
+                    rollup.Enabled += observation.Value;
+                if (observation.Tags.TryGetValue(ObservationTagIds.AttributionConfidence, out var confidence) &&
+                    Enum.TryParse<AttributionConfidence>(confidence, out var parsed) && parsed > rollup.Confidence)
+                    rollup.Confidence = parsed;
             }
 
             var ranked = contributions.Values.OrderByDescending(item => item.Total).Take(200).ToArray();
+            if (ranked.Length == 0)
+            {
+                Empty(context, ModLocalization.Get("analysis.noModifierContributions",
+                    "No attributed RD amplification or execution data"));
+                return;
+            }
+
             Rows.AddChild(BarChartPanel(ModLocalization.Get("dashboard.contributionAnalysis",
                 "Contribution analysis"), ranked.Take(12).Select(rollup => new DashboardBarDatum(
-                rollup.Source.DisplayName, rollup.Total, SourceColor(rollup.Source.Kind, context.Style),
-                Format(rollup.Total))), context.Style));
+                $"{rollup.Contributor.DisplayName} · {rollup.Source.DisplayName}", rollup.Total,
+                SourceColor(rollup.Source.Kind, context.Style), Format(rollup.Total))), context.Style));
             AddSection(ModLocalization.Get("analysis.contributionDetails", "Contribution details"),
                 Accent(context.Style, 4), context.Style, true);
             foreach (var rollup in ranked)
@@ -296,18 +331,15 @@ namespace STS2RitsuMetrics.Ui
                 header.AddChild(Badge(rollup.Source.Kind.ToString().ToUpperInvariant(), color, context.Style, 78));
                 header.AddChild(TruncatedLabel(rollup.Source.DisplayName, context.Style, false,
                     context.Style.FontSize + 1));
+                header.AddChild(Label(ModLocalization.Format("analysis.attributedPlayer", "→ {0}",
+                    rollup.Contributor.DisplayName), context.Style, true));
                 header.AddChild(Label($"×{rollup.Events}", context.Style, true));
                 box.AddChild(header);
                 box.AddChild(MetricGrid(context.Style,
                 [
-                    Stat("analysis.directContribution", "Direct", rollup.Direct, context.Style.NegativeColor),
                     Stat("analysis.enabledContribution", "Enabled", rollup.Enabled, Accent(context.Style, 4)),
-                    Stat("analysis.preventedContribution", "Prevented", rollup.Prevented,
-                        context.Style.PositiveColor),
                     Stat("analysis.executionContribution", "Execution", rollup.Execution,
                         context.Style.WarningColor),
-                    new(ModLocalization.Get("analysis.rawDelta", "Raw delta"), Format(rollup.Raw),
-                        Math.Abs(rollup.Raw), Accent(context.Style, 1)),
                     new(ModLocalization.Get("analysis.confidence", "Confidence"),
                         DashboardLocalization.AttributionConfidence(rollup.Confidence), 0m,
                         color),
@@ -315,9 +347,8 @@ namespace STS2RitsuMetrics.Ui
                 Rows.AddChild(Surface(box, context.Style, color));
             }
 
-            AddAttributionSummary(snapshot, context.Style);
             Status.Text = ModLocalization.Format("analysis.contributionSummary",
-                "{0} damage events · {1} contributing sources", damageEvents.Length, contributions.Count);
+                "{0} RD modifier observations · {1} attributed sources", observations.Length, contributions.Count);
         }
 
         private void RenderTurns(DashboardRenderContext context)
@@ -501,7 +532,7 @@ namespace STS2RitsuMetrics.Ui
             AddMaximum(records, "analysis.recordBestCombat", "Best player combat", playerCombats,
                 item => item.Value, item => item.Name);
             var cardSources = combats.SelectMany(combat => combat.Players)
-                .SelectMany(AggregatePlayerSources)
+                .SelectMany(player => AggregatePlayerSources(player))
                 .Where(source => source.Kind == AnalyticsSourceKind.Card)
                 .GroupBy(source => source.Name, StringComparer.CurrentCulture)
                 .Select(group => new NamedValue(group.Key,
@@ -581,41 +612,6 @@ namespace STS2RitsuMetrics.Ui
             foreach (var source in sources.Take(5))
                 content.AddChild(Meter(source.Name, $"{Format(source.Value)} · ×{source.Occurrences}",
                     source.Value, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
-        }
-
-        private void AddAttributionSummary(CombatSnapshot snapshot, DashboardStyleDefinition style)
-        {
-            var shares = Timeline(snapshot).Where(IsPlayerOffenseEvent)
-                .SelectMany(item => item.Damage!.AttributionShares!
-                    .Where(share => share.Contributor.Kind == AnalyticsEntityKind.Player))
-                .GroupBy(item => item.Contributor.Key)
-                .Select(group => new
-                {
-                    group.First().Contributor,
-                    Value = group.Sum(item => item.EffectiveContribution),
-                    Sources = group.Select(item => item.Source.Key).Distinct(StringComparer.Ordinal).Count(),
-                }).OrderByDescending(item => item.Value).ToArray();
-            if (shares.Length == 0)
-                return;
-            AddSection(ModLocalization.Get("analysis.attributionShares", "Effective attribution shares"),
-                style.WarningColor, style, true);
-            var maximum = Math.Max(1m, shares.Max(item => item.Value));
-            foreach (var share in shares)
-                Rows.AddChild(Meter(share.Contributor.DisplayName,
-                    ModLocalization.Format("analysis.sourceValue", "{0} · {1} sources", Format(share.Value),
-                        share.Sources), share.Value, maximum,
-                    style.WarningColor, style));
-        }
-
-        private static bool IsPlayerOffenseEvent(CombatTimelineEvent timelineEvent)
-        {
-            return timelineEvent is
-                   {
-                       Damage.AttributionShares.Count: > 0,
-                       Target.Kind: not (AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon),
-                   } &&
-                   timelineEvent.Damage.AttributionShares.Any(share =>
-                       share.Contributor.Kind == AnalyticsEntityKind.Player);
         }
 
         private static Control CardEffectRow(SourceRollup source, bool card, DashboardStyleDefinition style)
@@ -797,12 +793,26 @@ namespace STS2RitsuMetrics.Ui
         }
 
         private static Dictionary<string, SourceRollup>.ValueCollection AggregatePlayerSources(
-            PlayerMetricSnapshot player)
+            PlayerMetricSnapshot player,
+            bool displayFallback = false)
         {
             var rollups = new Dictionary<string, SourceRollup>(StringComparer.Ordinal);
-            foreach (var (metricId, sources) in player.Sources)
-            foreach (var source in sources)
+            var metrics = displayFallback
+                ? new[]
+                {
+                    MetricIds.DamageDealt,
+                    MetricIds.DamageContribution,
+                    MetricIds.EffectiveHpDamageDealt,
+                    MetricIds.EffectiveHpDamageContribution,
+                    MetricIds.DamageAmplified,
+                    MetricIds.Overkill,
+                }.Select(metricId => (MetricId: metricId,
+                    Sources: MetricSourcesForDisplay(player, metricId)))
+                : player.Sources.Select(metric => (MetricId: metric.Key, Sources: metric.Value));
+            foreach (var (metricId, sources) in metrics)
+            foreach (var rawSource in sources)
             {
+                var source = displayFallback ? PresentSource(player, rawSource) : rawSource;
                 if (!rollups.TryGetValue(source.SourceKey, out var rollup))
                 {
                     rollup = new(source.SourceKey, source.SourceKind, source.DisplayName);
@@ -818,11 +828,12 @@ namespace STS2RitsuMetrics.Ui
         }
 
         private static Dictionary<string, SourceRollup>.ValueCollection AggregateSources(
-            IReadOnlyList<PlayerMetricSnapshot> players)
+            IReadOnlyList<PlayerMetricSnapshot> players,
+            bool displayFallback = false)
         {
             var rollups = new Dictionary<string, SourceRollup>(StringComparer.Ordinal);
             foreach (var player in players)
-            foreach (var source in AggregatePlayerSources(player))
+            foreach (var source in AggregatePlayerSources(player, displayFallback))
             {
                 if (!rollups.TryGetValue(source.Key, out var rollup))
                 {
@@ -842,12 +853,19 @@ namespace STS2RitsuMetrics.Ui
 
         private static decimal SourceScore(SourceRollup source)
         {
-            return source.Totals.GetValueOrDefault(MetricIds.DamageDealt) +
-                   source.Totals.GetValueOrDefault(MetricIds.DamageAmplified) +
-                   source.Totals.GetValueOrDefault(MetricIds.DamageMitigated) +
-                   source.Totals.GetValueOrDefault(MetricIds.BlockGained) +
-                   source.Totals.GetValueOrDefault(MetricIds.HealingReceived) +
-                   source.Totals.Values.Where(value => value > 0m).Sum() * 0.001m;
+            return new[]
+            {
+                MetricIds.DamageContribution,
+                MetricIds.DamageDealt,
+                MetricIds.BlockGained,
+                MetricIds.DamageMitigated,
+                MetricIds.HealingReceived,
+            }.Max(metricId => SourceMetric(source, metricId));
+        }
+
+        private static decimal SourceMetric(SourceRollup source, string metricId)
+        {
+            return source.Totals.GetValueOrDefault(metricId);
         }
 
         private static string MetricName(string metricId)
@@ -862,7 +880,9 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
-                MetricIds.DamageDealt or MetricIds.DamageTaken or MetricIds.Overkill => style.NegativeColor,
+                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.EffectiveHpDamageDealt or
+                    MetricIds.EffectiveHpDamageContribution or MetricIds.DamageTaken or MetricIds.Overkill =>
+                    style.NegativeColor,
                 MetricIds.DamageBlocked or MetricIds.BlockGained or MetricIds.HealingReceived or
                     MetricIds.DamageMitigated => style.PositiveColor,
                 MetricIds.DamageAmplified => Accent(style, 4),
@@ -957,17 +977,15 @@ namespace STS2RitsuMetrics.Ui
             internal int TotalOccurrences => Occurrences.Values.Sum();
         }
 
-        private sealed class ContributionRollup(SourceDescriptor source)
+        private sealed class ContributionRollup(EntityDescriptor contributor, SourceDescriptor source)
         {
+            internal EntityDescriptor Contributor { get; } = contributor;
             internal SourceDescriptor Source { get; } = source;
             internal int Events { get; set; }
-            internal decimal Direct { get; set; }
             internal decimal Enabled { get; set; }
-            internal decimal Prevented { get; set; }
             internal decimal Execution { get; set; }
-            internal decimal Raw { get; set; }
             internal AttributionConfidence Confidence { get; set; } = AttributionConfidence.Exact;
-            internal decimal Total => Direct + Enabled + Prevented + Execution;
+            internal decimal Total => Enabled + Execution;
         }
 
         private sealed record StatCell(string Caption, string ValueText, decimal Value, string Color);

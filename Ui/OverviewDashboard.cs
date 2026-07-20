@@ -10,14 +10,16 @@ namespace STS2RitsuMetrics.Ui
     {
         private static readonly OverviewSectionDefinition[] Sections =
         [
-            new(OverviewSection.Offense, "overview.offense", "Offense", MetricIds.DamageDealt,
-                [MetricIds.DamageDealt, MetricIds.DamageAmplified, MetricIds.Overkill, MetricIds.PowersApplied], 0),
-            new(OverviewSection.Defense, "overview.defense", "Defense", MetricIds.DamageTaken,
-                [MetricIds.DamageTaken, MetricIds.DamageBlocked, MetricIds.BlockGained, MetricIds.HealingReceived], 2),
-            new(OverviewSection.Resources, "overview.resources", "Resources", MetricIds.CardsPlayed,
+            new(OverviewSection.Offense, "overview.offense", "Damage", MetricIds.DamageDealt,
+            [
+                MetricIds.DamageDealt, MetricIds.DamageContribution, MetricIds.DamageAmplified, MetricIds.Overkill,
+            ], 0),
+            new(OverviewSection.Defense, "overview.defense", "Survival", MetricIds.DamageTaken,
+                [MetricIds.DamageTaken, MetricIds.DamageBlocked, MetricIds.HealingReceived, MetricIds.Deaths], 2),
+            new(OverviewSection.Resources, "overview.resources", "Actions", MetricIds.CardsPlayed,
                 [MetricIds.EnergySpent, MetricIds.CardsPlayed, MetricIds.CardsDrawn, MetricIds.CardsExhausted], 3),
-            new(OverviewSection.Analysis, "overview.analysis", "Analysis", MetricIds.DamageAmplified,
-                [MetricIds.DamageAmplified, MetricIds.DamageMitigated, MetricIds.DebuffsApplied, MetricIds.PotionsUsed],
+            new(OverviewSection.Analysis, "overview.analysis", "Support", MetricIds.BlockGained,
+                [MetricIds.BlockGained, MetricIds.DamageMitigated, MetricIds.PowersApplied, MetricIds.DebuffsApplied],
                 4),
         ];
 
@@ -43,7 +45,7 @@ namespace STS2RitsuMetrics.Ui
                 DashboardPresentation.SingleLine(context.Parameters)));
 
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.keyMetrics", "Key metrics"),
-                ModLocalization.Get("overview.keyMetrics.meta", "Offense · defense · resources · effects"),
+                ModLocalization.Get("overview.keyMetrics.meta", "Damage · survival · actions · support"),
                 context.Style, Accent(context.Style, 1)));
             var metricSections = new GridContainer
             {
@@ -62,10 +64,13 @@ namespace STS2RitsuMetrics.Ui
             var flow = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             flow.AddThemeConstantOverride("h_separation", 8);
             flow.AddThemeConstantOverride("v_separation", 8);
-            flow.AddChild(BuildTopSources(players, Sections[(int)OverviewSection.Offense], context.Style));
-            flow.AddChild(BuildSourceComposition(players, Sections[(int)OverviewSection.Offense], context.Style));
+            flow.AddChild(BuildTopSources(players, MetricIds.DamageDealt, "overview.topSources.ad",
+                "Top AD sources", context.Style, 0));
+            flow.AddChild(BuildTopSources(players, MetricIds.DamageContribution, "overview.topSources.rd",
+                "Top RD sources", context.Style, 4));
             flow.AddChild(BuildTrend(context, Sections[(int)OverviewSection.Offense]));
-            flow.AddChild(BuildTrend(context, Sections[(int)OverviewSection.Defense]));
+            flow.AddChild(BuildTrend(context, Sections[(int)OverviewSection.Defense],
+                ModLocalization.Get("overview.incomingDamage", "Incoming damage")));
             Rows.AddChild(flow);
 
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatAnalysis", "Combat analysis"),
@@ -109,9 +114,9 @@ namespace STS2RitsuMetrics.Ui
                 var kpis = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
                 kpis.AddThemeConstantOverride("h_separation", 5);
                 kpis.AddThemeConstantOverride("v_separation", 5);
-                kpis.AddChild(Kpi("overview.damage", "Damage", damage, accent, style));
-                kpis.AddChild(Kpi("overview.contribution", "Contribution",
-                    damage + Metric(player, MetricIds.DamageAmplified), Accent(style, 4), style));
+                kpis.AddChild(Kpi("overview.appliedDamage", "Applied damage (AD)", damage, accent, style));
+                kpis.AddChild(Kpi("overview.responsibilityDamage", "Responsibility damage (RD)",
+                    MetricForDisplay(player, MetricIds.DamageContribution), Accent(style, 4), style));
                 kpis.AddChild(Kpi("analysis.damagePerTurn", "Damage / turn",
                     damage / Math.Max(1, snapshot.RoundCount), Accent(style, 1), style));
                 kpis.AddChild(Kpi("analysis.blockGained", "Block gained", Metric(player, MetricIds.BlockGained),
@@ -198,18 +203,20 @@ namespace STS2RitsuMetrics.Ui
             {
                 return metricId == MetricIds.DamageTaken
                     ? SnapshotStatistics.Survival(snapshot, player.PlayerNetId).PlayerHpLost
-                    : Metric(player, metricId);
+                    : MetricForDisplay(player, metricId);
             }
         }
 
         private static Control BuildTopSources(
             IReadOnlyList<PlayerMetricSnapshot> players,
-            OverviewSectionDefinition definition,
-            DashboardStyleDefinition style)
+            string metricId,
+            string titleKey,
+            string titleFallback,
+            DashboardStyleDefinition style,
+            int accentIndex)
         {
-            var body = ChartBody(ModLocalization.Get("overview.topSources", "Top sources"), style,
-                Accent(style, definition.AccentIndex));
-            var sources = AggregateSources(players, definition.PrimaryMetric)
+            var body = ChartBody(ModLocalization.Get(titleKey, titleFallback), style, Accent(style, accentIndex));
+            var sources = AggregateSources(players, metricId)
                 .OrderByDescending(source => source.Value).Take(8).ToArray();
             if (sources.Length == 0)
             {
@@ -223,7 +230,7 @@ namespace STS2RitsuMetrics.Ui
                 SourceColor(source.Kind, style, index), Format(source.Value))), Math.Max(11, style.FontSize - 1));
             body.AddChild(chart);
 
-            return Surface(body, style, Accent(style, definition.AccentIndex));
+            return Surface(body, style, Accent(style, accentIndex));
         }
 
         private static Control BuildSourceComposition(
@@ -256,10 +263,11 @@ namespace STS2RitsuMetrics.Ui
 
         private static Control BuildTrend(
             DashboardRenderContext context,
-            OverviewSectionDefinition definition)
+            OverviewSectionDefinition definition,
+            string? title = null)
         {
             var style = context.Style;
-            var sectionName = ModLocalization.Get(definition.LocalizationKey, definition.FallbackName);
+            var sectionName = title ?? ModLocalization.Get(definition.LocalizationKey, definition.FallbackName);
             if (context is
                 {
                     Scope: DashboardDataScope.CurrentRun,
@@ -515,19 +523,16 @@ namespace STS2RitsuMetrics.Ui
         {
             var values = new Dictionary<string, OverviewSource>(StringComparer.Ordinal);
             foreach (var player in players)
+            foreach (var rawSource in MetricSourcesForDisplay(player, metricId))
             {
-                if (!player.Sources.TryGetValue(metricId, out var sources))
-                    continue;
-                foreach (var source in sources)
+                var source = PresentSource(player, rawSource);
+                if (!values.TryGetValue(source.SourceKey, out var value))
                 {
-                    if (!values.TryGetValue(source.SourceKey, out var value))
-                    {
-                        value = new(source.SourceKind, source.DisplayName, 0m);
-                        values.Add(source.SourceKey, value);
-                    }
-
-                    values[source.SourceKey] = value with { Value = value.Value + source.Value };
+                    value = new(source.SourceKind, source.DisplayName, 0m);
+                    values.Add(source.SourceKey, value);
                 }
+
+                values[source.SourceKey] = value with { Value = value.Value + source.Value };
             }
 
             return values.Values.ToArray();

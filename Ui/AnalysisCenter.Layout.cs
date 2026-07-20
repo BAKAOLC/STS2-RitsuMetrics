@@ -105,7 +105,8 @@ namespace STS2RitsuMetrics.Ui
             subtitle.AddThemeColorOverride("font_color", new("94A3B8FF"));
             titles.AddChild(subtitle);
             _header.AddChild(titles);
-            var refresh = HeaderButton("↻", ModLocalization.Get("analysis.refresh", "Refresh history"),
+            var refresh = HeaderIconButton(DashboardIcon.Refresh,
+                ModLocalization.Get("analysis.refresh", "Refresh history"),
                 DashboardButtonKind.Subtle);
             refresh.Pressed += ReloadRuns;
             _header.AddChild(refresh);
@@ -118,7 +119,7 @@ namespace STS2RitsuMetrics.Ui
                 DashboardButtonKind.Standard, 48f);
             exportCsv.Pressed += () => ExportSelection(MetricsExportFormat.Csv);
             _header.AddChild(exportCsv);
-            _close = HeaderButton("×", ModLocalization.Get("overlay.close", "Close"),
+            _close = HeaderIconButton(DashboardIcon.Close, ModLocalization.Get("overlay.close", "Close"),
                 DashboardButtonKind.Danger);
             _close.Pressed += Hide;
             _header.AddChild(_close);
@@ -317,16 +318,8 @@ namespace STS2RitsuMetrics.Ui
             var row = new HBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
             row.AddThemeConstantOverride("separation", 8);
             margin.AddChild(row);
-            var chevron = new Label
-            {
-                Text = expanded ? "▾" : "▸",
-                CustomMinimumSize = new(18, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                MouseFilter = MouseFilterEnum.Ignore,
-            };
-            chevron.AddThemeFontSizeOverride("font_size", DashboardControlTheme.WindowTitleFontSize);
-            chevron.AddThemeColorOverride("font_color", new(selected ? "70C6F4FF" : "8DA1B8FF"));
+            var chevron = DashboardIcons.View(expanded ? DashboardIcon.Collapse : DashboardIcon.Expand, 18f,
+                new(selected ? "70C6F4FF" : "8DA1B8FF"));
             row.AddChild(chevron);
             var identity = new VBoxContainer
             {
@@ -506,7 +499,6 @@ namespace STS2RitsuMetrics.Ui
         {
             var button = new Button
             {
-                Text = "×",
                 CustomMinimumSize = new(42, 44),
                 FocusMode = FocusModeEnum.None,
                 Disabled = disabled,
@@ -516,6 +508,7 @@ namespace STS2RitsuMetrics.Ui
                     : ModLocalization.Get("analysis.deleteRun", "Delete run"),
             };
             DashboardControlTheme.ApplyIconButton(button, DashboardButtonKind.Danger, compact: true);
+            DashboardIcons.ApplyIconOnly(button, DashboardIcon.Delete);
             return button;
         }
 
@@ -540,10 +533,21 @@ namespace STS2RitsuMetrics.Ui
                 CustomMinimumSize = new(width, 38),
                 FocusMode = FocusModeEnum.None,
             };
-            if (text.Length == 1)
-                DashboardControlTheme.ApplyIconButton(button, kind);
-            else
-                DashboardControlTheme.ApplyButton(button, kind);
+            DashboardControlTheme.ApplyButton(button, kind);
+            return button;
+        }
+
+        private static Button HeaderIconButton(DashboardIcon icon, string tooltip, DashboardButtonKind kind,
+            float width = 38f)
+        {
+            var button = new Button
+            {
+                TooltipText = tooltip,
+                CustomMinimumSize = new(width, 38),
+                FocusMode = FocusModeEnum.None,
+            };
+            DashboardControlTheme.ApplyIconButton(button, kind);
+            DashboardIcons.ApplyIconOnly(button, icon);
             return button;
         }
 

@@ -53,15 +53,45 @@ namespace STS2RitsuMetrics.Core
             {
                 foreach (var total in player.Totals)
                     _totals[total.Key] = _totals.GetValueOrDefault(total.Key) + total.Value;
-                foreach (var metric in player.Sources)
+                AddFallbackTotal(MetricIds.DamageContribution, MetricIds.DamageDealt);
+                AddFallbackTotal(MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt);
+                AddFallbackTotal(MetricIds.EffectiveHpDamageContribution,
+                    player.Totals.ContainsKey(MetricIds.EffectiveHpDamageDealt)
+                        ? MetricIds.EffectiveHpDamageDealt
+                        : MetricIds.DamageDealt);
+                foreach (var metric in player.Sources) AddSources(metric.Key, metric.Value);
+
+                AddFallbackSources(MetricIds.DamageContribution, MetricIds.DamageDealt);
+                AddFallbackSources(MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt);
+                AddFallbackSources(MetricIds.EffectiveHpDamageContribution,
+                    player.Sources.ContainsKey(MetricIds.EffectiveHpDamageDealt)
+                        ? MetricIds.EffectiveHpDamageDealt
+                        : MetricIds.DamageDealt);
+
+                void AddFallbackTotal(string metricId, string fallbackId)
                 {
-                    if (!_sources.TryGetValue(metric.Key, out var sources))
+                    if (player.Totals.ContainsKey(metricId) || !player.Totals.TryGetValue(fallbackId, out var value))
+                        return;
+                    _totals[metricId] = _totals.GetValueOrDefault(metricId) + value;
+                }
+
+                void AddFallbackSources(string metricId, string fallbackId)
+                {
+                    if (player.Sources.ContainsKey(metricId) ||
+                        !player.Sources.TryGetValue(fallbackId, out var fallbackSources))
+                        return;
+                    AddSources(metricId, fallbackSources);
+                }
+
+                void AddSources(string metricId, IReadOnlyList<SourceMetricSnapshot> metricSources)
+                {
+                    if (!_sources.TryGetValue(metricId, out var sources))
                     {
                         sources = new(StringComparer.Ordinal);
-                        _sources.Add(metric.Key, sources);
+                        _sources.Add(metricId, sources);
                     }
 
-                    foreach (var source in metric.Value)
+                    foreach (var source in metricSources)
                     {
                         if (!sources.TryGetValue(source.SourceKey, out var accumulator))
                         {

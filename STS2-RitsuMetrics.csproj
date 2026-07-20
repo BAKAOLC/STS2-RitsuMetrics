@@ -30,6 +30,7 @@
 
     <ItemGroup>
         <Content Include="mod_manifest.json"/>
+        <Content Include="THIRD-PARTY-NOTICES.txt"/>
         <EmbeddedResource Include="Localization\*.json"
                           LogicalName="STS2RitsuMetrics.Localization.%(Filename)%(Extension)"/>
     </ItemGroup>
@@ -47,5 +48,7 @@
         <MakeDir Directories="$(RitsuMetricsDeployDir)"/>
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(RitsuMetricsDeployDir)"/>
         <Copy SourceFiles="$(MSBuildProjectDirectory)\mod_manifest.json" DestinationFolder="$(RitsuMetricsDeployDir)"/>
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\THIRD-PARTY-NOTICES.txt"
+              DestinationFolder="$(RitsuMetricsDeployDir)"/>
     </Target>
 </Project>

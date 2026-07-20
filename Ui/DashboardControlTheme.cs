@@ -23,7 +23,6 @@ namespace STS2RitsuMetrics.Ui
     public static class DashboardControlTheme
     {
         private const string StyledMeta = "ritsumetrics_control_styled";
-        private static ImageTexture? _selectorArrow;
         public static int CaptionFontSize => 15;
         public static int SecondaryFontSize => 16;
         public static int BodyFontSize => 17;
@@ -92,7 +91,7 @@ namespace STS2RitsuMetrics.Ui
                 Math.Max(height, button.CustomMinimumSize.Y));
             button.Alignment = HorizontalAlignment.Left;
             button.IconAlignment = HorizontalAlignment.Right;
-            button.Icon = _selectorArrow ??= MakeArrow();
+            button.Icon = DashboardIcons.Texture(DashboardIcon.Collapse, 16);
             button.ExpandIcon = false;
             button.AddThemeFontSizeOverride("font_size", compact ? SecondaryFontSize : BodyFontSize + 1);
             button.AddThemeColorOverride("font_color", Color(dashboardStyle?.TextColor, "DCE6F4FF"));
@@ -308,16 +307,6 @@ namespace STS2RitsuMetrics.Ui
                 CornerRadiusBottomLeft = 5,
                 CornerRadiusBottomRight = 5,
             };
-        }
-
-        private static ImageTexture MakeArrow()
-        {
-            var image = Image.CreateEmpty(10, 6, false, Image.Format.Rgba8);
-            var color = new Color("8FC8EDFF");
-            for (var y = 0; y < 5; y++)
-            for (var x = y; x < 10 - y; x++)
-                image.SetPixel(x, y, color);
-            return ImageTexture.CreateFromImage(image);
         }
 
         private sealed record ButtonColors(

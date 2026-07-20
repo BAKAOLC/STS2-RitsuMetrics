@@ -77,6 +77,7 @@ namespace STS2RitsuMetrics.Ui
             _definition = definition;
             _renderer = renderer;
             _state = state;
+            BindRendererInteractions();
             Name = $"Dashboard_{state.InstanceId}";
             MouseFilter = MouseFilterEnum.Stop;
             BuildUi();
@@ -223,6 +224,7 @@ namespace STS2RitsuMetrics.Ui
             var previousRenderer = _renderer;
             var previousView = previousRenderer.View;
             _renderer = nextRenderer;
+            BindRendererInteractions();
             _definition = provider.Definition;
             _state.DashboardId = provider.Definition.Id;
             _state.StyleId = styleId;
@@ -309,14 +311,7 @@ namespace STS2RitsuMetrics.Ui
             root.AddChild(_header);
             _accent = new() { CustomMinimumSize = new(4, 0), MouseFilter = MouseFilterEnum.Ignore };
             _header.AddChild(_accent);
-            var grip = new Label
-            {
-                Text = "⋮⋮",
-                CustomMinimumSize = new(18, 0),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                MouseFilter = MouseFilterEnum.Ignore,
-            };
+            var grip = DashboardIcons.View(DashboardIcon.DragHandle, 18f, new("A9B9CCFF"));
             _header.AddChild(grip);
             _title = new()
             {
@@ -335,12 +330,13 @@ namespace STS2RitsuMetrics.Ui
             _title.ItemSelected += OnDashboardSelected;
             _header.AddChild(_title);
             RebuildDashboardSelector();
-            _header.AddChild(HeaderButton("＋",
+            _header.AddChild(HeaderButton(DashboardIcon.ManageDashboards,
                 ModLocalization.Get("dashboard.manage", "Manage dashboards"), _host.ToggleManager));
-            _header.AddChild(HeaderButton("—", ModLocalization.Get("overlay.collapse", "Collapse"),
+            _header.AddChild(HeaderButton(DashboardIcon.Minimize,
+                ModLocalization.Get("overlay.collapse", "Collapse"),
                 ToggleCollapsed));
-            _header.AddChild(HeaderButton("×", ModLocalization.Get("dialog.close", "Close"),
-                () => _host.CloseWindow(_state.InstanceId)));
+            _header.AddChild(HeaderButton(DashboardIcon.Close, ModLocalization.Get("dialog.close", "Close"),
+                () => _host.CloseWindow(_state.InstanceId), DashboardButtonKind.Danger));
 
             _body = new()
             {
@@ -620,6 +616,21 @@ namespace STS2RitsuMetrics.Ui
             return scope == DashboardDataScope.CurrentRun
                 ? ModLocalization.Get("overlay.currentRun", "Current run")
                 : ModLocalization.Get("overlay.currentCombat", "Current combat");
+        }
+
+        private void BindRendererInteractions()
+        {
+            if (_renderer is DashboardRendererBase builtInRenderer)
+                builtInRenderer.SetScopeToggle(ToggleScope);
+        }
+
+        private void ToggleScope()
+        {
+            var scope = _state.Scope == DashboardDataScope.CurrentCombat
+                ? DashboardDataScope.CurrentRun
+                : DashboardDataScope.CurrentCombat;
+            _host.ConfigureWindow(_state.InstanceId, scope, _state.StyleId, _state.Parameters);
+            MoveToFront();
         }
 
         private void ToggleCollapsed()
@@ -954,20 +965,19 @@ namespace STS2RitsuMetrics.Ui
                 Math.Clamp(position.Y, 0f, Math.Max(0f, viewport.Y - Math.Min(_headerHeight, scaled.Y))));
         }
 
-        private static Button HeaderButton(string text, string tooltip, Action action)
+        private static Button HeaderButton(DashboardIcon icon, string tooltip, Action action,
+            DashboardButtonKind kind = DashboardButtonKind.Subtle)
         {
             var button = new Button
             {
-                Text = text,
                 TooltipText = tooltip,
                 CustomMinimumSize = new(34, 34),
                 SizeFlagsVertical = SizeFlags.ShrinkCenter,
                 FocusMode = FocusModeEnum.None,
             };
-            DashboardControlTheme.ApplyIconButton(button,
-                text == "×" ? DashboardButtonKind.Danger : DashboardButtonKind.Subtle, compact: true);
+            DashboardControlTheme.ApplyIconButton(button, kind, compact: true);
+            DashboardIcons.ApplyIconOnly(button, icon, 17);
             button.CustomMinimumSize = new(34, 34);
-            button.AddThemeFontSizeOverride("font_size", DashboardControlTheme.SecondaryFontSize);
             button.SizeFlagsVertical = SizeFlags.ShrinkCenter;
             button.Pressed += action;
             return button;
