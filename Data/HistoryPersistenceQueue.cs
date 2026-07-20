@@ -29,14 +29,10 @@ namespace STS2RitsuMetrics.Data
                 SaveScope.Profile,
                 profileId,
                 ModConstants.ModId);
-            var snapshot = new HistoryArchive
-            {
-                DataVersion = archive.DataVersion,
-                Runs = [.. archive.Runs],
-            };
+            var dataDirectory = HistoryArchiveJsonConverter.GetDataDirectory(profileId);
             lock (Gate)
             {
-                PendingWrites[path] = new(path, snapshot, operation);
+                PendingWrites[path] = new(path, dataDirectory, archive, operation);
                 if (_workerRunning)
                     return;
                 _workerRunning = true;
@@ -79,20 +75,37 @@ namespace STS2RitsuMetrics.Data
 
                 try
                 {
-                    HistoryArchiveJsonConverter.PrepareForWrite(pending.Archive, JsonOptions);
+                    var archive = pending.Archive.CreatePersistenceSnapshot();
                     lock (Gate)
                     {
                         if (PendingWrites.ContainsKey(pending.Path))
                             continue;
                     }
 
+                    HistoryArchiveJsonConverter.PrepareForWrite(
+                        archive,
+                        JsonOptions,
+                        pending.DataDirectory);
+                    lock (Gate)
+                    {
+                        if (PendingWrites.ContainsKey(pending.Path))
+                            continue;
+                    }
+
+                    // PersistentDataEntry deep-clones constructor data through JSON. Initialize it empty so a
+                    // history write does not deserialize every prepared combat before serializing it again.
                     var entry = new PersistentDataEntry<HistoryArchive>(
                         ModConstants.ModId,
                         ModConstants.HistoryFileName,
                         SaveScope.Profile,
-                        pending.Archive,
+                        new(),
                         JsonOptions,
                         new());
+                    entry.Modify(data =>
+                    {
+                        data.DataVersion = archive.DataVersion;
+                        data.Runs = archive.Runs;
+                    });
                     var previousStorage = HistoryArchiveJsonConverter.GetLastWriteMetrics();
                     var saved = entry.SaveTo(pending.Path);
                     if (!saved)
@@ -102,8 +115,9 @@ namespace STS2RitsuMetrics.Data
                         continue;
                     }
 
+                    HistoryArchiveJsonConverter.CompleteWrite(archive, pending.DataDirectory);
                     var storage = HistoryArchiveJsonConverter.GetLastWriteMetrics();
-                    LogCompletedWrite(pending, previousStorage, storage);
+                    LogCompletedWrite(pending, archive, previousStorage, storage);
                 }
                 catch (Exception exception)
                 {
@@ -115,6 +129,7 @@ namespace STS2RitsuMetrics.Data
 
         private static void LogCompletedWrite(
             PendingWrite pending,
+            HistoryArchive archive,
             HistoryStorageWriteMetrics previousStorage,
             HistoryStorageWriteMetrics storage)
         {
@@ -125,21 +140,24 @@ namespace STS2RitsuMetrics.Data
                 return;
             }
 
-            var combats = pending.Archive.Runs.Sum(run => run.Combats.Count);
-            var observations = pending.Archive.Runs.Sum(run => run.Combats.Sum(combat => combat.Events.Count));
-            var timelineEvents = pending.Archive.Runs.Sum(run =>
+            var combats = archive.Runs.Sum(run => run.Combats.Count);
+            var observations = archive.Runs.Sum(run => run.Combats.Sum(combat => combat.Events.Count));
+            var timelineEvents = archive.Runs.Sum(run =>
                 run.Combats.Sum(combat => combat.Timeline?.Count ?? 0));
             var reduction = storage.UncompressedBytes == 0
                 ? 0d
-                : 1d - (double)storage.EncodedPayloadBytes / storage.UncompressedBytes;
+                : 1d - (double)storage.StoredBytes / storage.UncompressedBytes;
             Main.Logger.Debug(
-                $"History persisted asynchronously ({pending.Operation}): runs={pending.Archive.Runs.Count}, " +
+                $"History persisted asynchronously ({pending.Operation}): runs={archive.Runs.Count}, " +
                 $"combats={combats}, observations={observations}, timeline={timelineEvents}, " +
-                $"combat_json_bytes={storage.UncompressedBytes}, stored_payload_bytes={storage.CompressedBytes}, " +
-                $"base64_bytes={storage.EncodedPayloadBytes}, " +
+                $"combat_json_bytes={storage.UncompressedBytes}, combat_file_bytes={storage.StoredBytes}, " +
                 $"reduction={reduction.ToString("P1", CultureInfo.InvariantCulture)}.");
         }
 
-        private sealed record PendingWrite(string Path, HistoryArchive Archive, string Operation);
+        private sealed record PendingWrite(
+            string Path,
+            string DataDirectory,
+            HistoryArchive Archive,
+            string Operation);
     }
 }

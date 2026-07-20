@@ -33,6 +33,7 @@ namespace STS2RitsuMetrics.Ui
         private DashboardDialogController _dialogs = null!;
         private bool _dirty = true;
         private int _historyHash;
+        private long _historyLoadRevision;
         private int _historyRevision;
         private VBoxContainer _historyRows = null!;
         private Label _historySummary = null!;
@@ -81,6 +82,12 @@ namespace STS2RitsuMetrics.Ui
         {
             if (!Visible)
                 return;
+            var historyLoadRevision = ModData.HistoryLoadRevision;
+            if (_historyLoadRevision != historyLoadRevision)
+            {
+                _historyLoadRevision = historyLoadRevision;
+                ReloadRuns();
+            }
             ProcessPendingSearch(delta);
             _refreshDelay -= delta;
             if (!_dirty || _refreshDelay > 0d)
@@ -217,6 +224,7 @@ namespace STS2RitsuMetrics.Ui
 
         private void ReloadRuns()
         {
+            _historyLoadRevision = ModData.HistoryLoadRevision;
             var live = Main.Repository.GetLiveRunSummary();
             var runs = MetricsRepository.GetSavedRuns(false, false).ToList();
             if (live != null)

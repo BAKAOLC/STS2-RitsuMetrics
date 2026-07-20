@@ -14,6 +14,8 @@ namespace STS2RitsuMetrics.Data
 
         internal static ModSettings Settings => Store.Get<ModSettings>(ModConstants.SettingsKey);
 
+        internal static long HistoryLoadRevision => History.LoadRevision;
+
         internal static HistoryArchive History
         {
             get
@@ -44,7 +46,7 @@ namespace STS2RitsuMetrics.Data
                     ModConstants.HistoryKey,
                     ModConstants.HistoryFileName,
                     SaveScope.Profile,
-                    true,
+                    false,
                     () => new HistoryArchive(),
                     true);
             }
@@ -62,7 +64,7 @@ namespace STS2RitsuMetrics.Data
         internal static void ModifyHistory(Action<HistoryArchive> modifier, bool save = true,
             string operation = "update")
         {
-            Store.Modify(ModConstants.HistoryKey, modifier);
+            Store.Modify<HistoryArchive>(ModConstants.HistoryKey, archive => archive.ApplyMutation(modifier));
             if (!save)
                 return;
 
@@ -73,7 +75,10 @@ namespace STS2RitsuMetrics.Data
 
         internal static void ClearHistory()
         {
-            ModifyHistory(archive => archive.Runs.Clear(), operation: "clear");
+            var history = History;
+            Store.Modify<HistoryArchive>(ModConstants.HistoryKey, archive => archive.ClearForMutation());
+            history.RequiresStorageRewrite = false;
+            QueueHistoryWrite(history, "clear");
         }
 
         private static void QueueHistoryWrite(HistoryArchive history, string operation)

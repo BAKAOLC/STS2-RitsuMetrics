@@ -27,11 +27,13 @@ namespace STS2RitsuMetrics.Ui
         private long _cachedSnapshotRevision = -1;
         private bool _capstoneInUse;
         private double _dashboardDataRefreshDelay;
+        private Task<DashboardDataCache>? _dashboardDataRefreshTask;
         private DashboardManagerPanel? _manager;
         private DashboardRegistry _registry = null!;
         private int _settingsHash;
         private long _snapshotRevision;
         private Theme? _typographyTheme;
+        private bool _visibilityDirty;
         private CanvasLayer _windowLayer = null!;
 
         internal IReadOnlyCollection<DashboardWindowInfo> WindowInfos => _windows.Values
@@ -158,6 +160,12 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Process(double delta)
         {
+            if (_visibilityDirty)
+            {
+                _visibilityDirty = false;
+                UpdateVisibility();
+            }
+
             _dashboardDataRefreshDelay = Math.Max(0d, _dashboardDataRefreshDelay - delta);
             RefreshDashboardDataIfDue();
             var capstoneInUse = NCapstoneContainer.Instance?.InUse == true;
@@ -477,26 +485,23 @@ namespace STS2RitsuMetrics.Ui
                 _snapshotRevision++;
             }
 
-            UpdateVisibility();
+            _visibilityDirty = true;
         }
 
         private void RefreshDashboardDataIfDue()
         {
+            ApplyCompletedDashboardDataRefresh();
             if (_dashboardDataRefreshDelay > 0d || !HasVisibleDataConsumer())
                 return;
             long revision;
             lock (_dashboardDataGate)
             {
-                if (_cachedSnapshotRevision == _snapshotRevision)
+                if (_cachedSnapshotRevision == _snapshotRevision || _dashboardDataRefreshTask != null)
                     return;
                 revision = _snapshotRevision;
             }
 
-            RefreshDashboardData(revision);
-            _dashboardDataRefreshDelay = DashboardDataRefreshInterval;
-            foreach (var window in _windows.Values)
-                window.MarkDirty();
-            _analysisCenter?.MarkDirty();
+            BeginDashboardDataRefresh(revision);
         }
 
         private void EnsureDashboardDataCache()
@@ -509,22 +514,55 @@ namespace STS2RitsuMetrics.Ui
                 revision = _snapshotRevision;
             }
 
-            RefreshDashboardData(revision);
+            if (_dashboardDataRefreshTask == null)
+                BeginDashboardDataRefresh(revision);
         }
 
-        private void RefreshDashboardData(long revision)
+        private void BeginDashboardDataRefresh(long revision)
         {
-            var run = Main.Repository.GetLiveRunForDashboard();
-            var combat = run is { Combats.Count: > 0 }
-                ? run.Combats[^1]
-                : Main.Repository.GetLiveCombat(true);
+            var repository = Main.Repository;
+            _dashboardDataRefreshDelay = DashboardDataRefreshInterval;
+            _dashboardDataRefreshTask = Task.Run(() => CaptureDashboardData(repository, revision));
+        }
+
+        private void ApplyCompletedDashboardDataRefresh()
+        {
+            if (_dashboardDataRefreshTask is not { IsCompleted: true } completed)
+                return;
+            _dashboardDataRefreshTask = null;
+            DashboardDataCache data;
+            try
+            {
+                data = completed.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Asynchronous dashboard snapshot refresh failed: {exception}");
+                return;
+            }
+
             lock (_dashboardDataGate)
             {
-                _cachedRun = run;
-                _cachedCombatSnapshot = combat;
+                if (data.Revision < _cachedSnapshotRevision)
+                    return;
+                _cachedRun = data.Run;
+                _cachedCombatSnapshot = data.Combat;
                 _cachedRunSnapshot = null;
-                _cachedSnapshotRevision = revision;
+                _cachedSnapshotRevision = data.Revision;
             }
+
+            foreach (var window in _windows.Values)
+                window.MarkDirty();
+            _analysisCenter?.MarkDirty();
+        }
+
+        private static DashboardDataCache CaptureDashboardData(MetricsRepository repository, long revision)
+        {
+            var run = repository.GetLiveRunForDashboard();
+            var combat = run is { Combats.Count: > 0 }
+                ? run.Combats[^1]
+                : repository.GetLiveCombat(true);
+            return new(revision, run, combat);
         }
 
         private bool HasVisibleDataConsumer()
@@ -605,5 +643,10 @@ namespace STS2RitsuMetrics.Ui
             return HashCode.Combine(displaySettings, RunManager.Instance.IsGameOver,
                 RunManager.Instance.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true);
         }
+
+        private readonly record struct DashboardDataCache(
+            long Revision,
+            RunSnapshot? Run,
+            CombatSnapshot? Combat);
     }
 }
