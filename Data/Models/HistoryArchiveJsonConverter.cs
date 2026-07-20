@@ -60,6 +60,9 @@ namespace STS2RitsuMetrics.Data.Models
 
         public override void Write(Utf8JsonWriter writer, HistoryArchive value, JsonSerializerOptions options)
         {
+            if (!value.IsLoadReady)
+                throw new JsonException("Analytics history is still loading and cannot be serialized yet.");
+
             var writeSequence = Interlocked.Increment(ref _writeSequence);
             var storedRuns = new List<FileRun>(value.Runs.Count);
             long uncompressedBytes = 0;
@@ -167,6 +170,37 @@ namespace STS2RitsuMetrics.Data.Models
                 File.Delete(tempPath);
         }
 
+        internal static void VerifyPersistedArchive(
+            HistoryArchive expected,
+            string indexPath,
+            string dataDirectory,
+            JsonSerializerOptions options)
+        {
+            var index = JsonSerializer.Deserialize<FileArchiveIndex>(
+                            File.ReadAllText(indexPath),
+                            GetCompactOptions(options))
+                        ?? throw new JsonException("Persisted analytics history index is empty.");
+            var expectedIds = expected.Runs
+                .SelectMany(run => run.Combats.Select(combat => (run.RunId, combat.CombatId)))
+                .ToHashSet();
+            var actualIds = index.Runs
+                .SelectMany(run => run.Combats.Select(combat => (run.RunId, combat.CombatId)))
+                .ToHashSet();
+            if (expected.Runs.Count != index.Runs.Count || !expectedIds.SetEquals(actualIds))
+                throw new JsonException("Persisted analytics history index does not match the migrated history.");
+
+            foreach (var run in index.Runs)
+            foreach (var reference in run.Combats)
+            {
+                ValidateFileReference(run.RunId, reference);
+                var stored = ReadCombatFile(Path.Combine(dataDirectory, reference.FileName), reference);
+                var combat = JsonSerializer.Deserialize<CombatSnapshot>(Decode(stored), GetCompactOptions(options))
+                             ?? throw new JsonException("Persisted analytics combat is empty.");
+                if (combat.RunId != run.RunId || combat.CombatId != reference.CombatId)
+                    throw new JsonException("Persisted analytics combat identity does not match its index.");
+            }
+        }
+
         internal static HistoryStorageWriteMetrics GetLastWriteMetrics()
         {
             lock (MetricsGate)
@@ -179,6 +213,10 @@ namespace STS2RitsuMetrics.Data.Models
         {
             var index = root.Deserialize<FileArchiveIndex>(GetCompactOptions(options))
                         ?? throw new JsonException("History archive index is empty.");
+            if (index.Runs.Count > 0 && index.Runs.All(run => run.Combats.Count == 0)
+                                     && TryRecoverEmptyIndex(options, out var recovered))
+                return recovered;
+
             var archive = new HistoryArchive
             {
                 DataVersion = index.DataVersion,
@@ -190,7 +228,56 @@ namespace STS2RitsuMetrics.Data.Models
                 var dataDirectory = GetDataDirectory(profileId < 0 ? 1 : profileId);
                 archive.AttachPendingLoad(Task.Run(() => LoadCombatFiles(index, options, dataDirectory)));
             }
+
             return archive;
+        }
+
+        private static bool TryRecoverEmptyIndex(JsonSerializerOptions options, out HistoryArchive recovered)
+        {
+            recovered = null!;
+            try
+            {
+                var profileId = ProfileManager.Instance.CurrentProfileId;
+                var historyPath = ProfileManager.GetFilePath(
+                    ModConstants.HistoryFileName,
+                    SaveScope.Profile,
+                    profileId < 0 ? 1 : profileId,
+                    ModConstants.ModId);
+                var backupPath = ProjectSettings.GlobalizePath(historyPath) + ".backup";
+                if (!File.Exists(backupPath))
+                    return false;
+
+                var backupJson = File.ReadAllText(backupPath);
+                using var backupDocument = JsonDocument.Parse(backupJson);
+                if (!ContainsCombatData(backupDocument.RootElement))
+                    return false;
+
+                recovered = JsonSerializer.Deserialize<HistoryArchive>(backupJson, options)
+                            ?? throw new JsonException("Analytics history backup is empty.");
+                recovered.RequiresStorageRewrite = true;
+                Main.Logger.Warn(
+                    "Recovered analytics history from backup after detecting the 0.1.13 empty-index regression.");
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to recover analytics history from backup: {exception}");
+                recovered = null!;
+                return false;
+            }
+        }
+
+        private static bool ContainsCombatData(JsonElement root)
+        {
+            if (!TryGetProperty(root, nameof(FileArchiveIndex.Runs), out var runs)
+                || runs.ValueKind != JsonValueKind.Array)
+                return false;
+            foreach (var run in runs.EnumerateArray())
+                if (TryGetProperty(run, nameof(FileRun.Combats), out var combats)
+                    && combats.ValueKind == JsonValueKind.Array
+                    && combats.GetArrayLength() > 0)
+                    return true;
+            return false;
         }
 
         private static List<RunSnapshot> CreateIndexStubs(FileArchiveIndex index)

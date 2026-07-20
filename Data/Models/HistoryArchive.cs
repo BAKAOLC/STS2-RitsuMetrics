@@ -33,12 +33,26 @@ namespace STS2RitsuMetrics.Data.Models
 
         [JsonIgnore] internal bool RequiresStorageRewrite { get; set; }
 
-        [JsonIgnore] internal long LoadRevision
+        [JsonIgnore]
+        internal long LoadRevision
         {
             get
             {
                 CompletePendingLoadIfReady();
                 return Interlocked.Read(ref _loadRevision);
+            }
+        }
+
+        [JsonIgnore]
+        internal bool IsLoadReady
+        {
+            get
+            {
+                CompletePendingLoadIfReady();
+                lock (_gate)
+                {
+                    return _pendingLoad == null && _loadFailure == null;
+                }
             }
         }
 

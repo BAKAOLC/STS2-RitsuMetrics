@@ -160,6 +160,7 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Process(double delta)
         {
+            ModData.PumpHistoryLoad();
             if (_visibilityDirty)
             {
                 _visibilityDirty = false;

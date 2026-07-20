@@ -3,6 +3,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Godot;
 using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuMetrics.Data.Models;
 
@@ -30,9 +31,10 @@ namespace STS2RitsuMetrics.Data
                 profileId,
                 ModConstants.ModId);
             var dataDirectory = HistoryArchiveJsonConverter.GetDataDirectory(profileId);
+            var absolutePath = ProjectSettings.GlobalizePath(path);
             lock (Gate)
             {
-                PendingWrites[path] = new(path, dataDirectory, archive, operation);
+                PendingWrites[path] = new(path, absolutePath, dataDirectory, profileId, archive, operation);
                 if (_workerRunning)
                     return;
                 _workerRunning = true;
@@ -116,6 +118,12 @@ namespace STS2RitsuMetrics.Data
                     }
 
                     HistoryArchiveJsonConverter.CompleteWrite(archive, pending.DataDirectory);
+                    ModData.OnHistoryWriteCompleted(
+                        pending.ProfileId,
+                        archive,
+                        pending.AbsolutePath,
+                        pending.DataDirectory,
+                        JsonOptions);
                     var storage = HistoryArchiveJsonConverter.GetLastWriteMetrics();
                     LogCompletedWrite(pending, archive, previousStorage, storage);
                 }
@@ -156,7 +164,9 @@ namespace STS2RitsuMetrics.Data
 
         private sealed record PendingWrite(
             string Path,
+            string AbsolutePath,
             string DataDirectory,
+            int ProfileId,
             HistoryArchive Archive,
             string Operation);
     }

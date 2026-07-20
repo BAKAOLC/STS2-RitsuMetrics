@@ -63,6 +63,8 @@ namespace STS2RitsuMetrics.Core
         private MutableRunSession? _liveRun;
         private long _metricSequence;
         private MutableCombatSession? _pendingRestoredCombat;
+        private RunLoadedEvent? _pendingRunLoaded;
+        private RunStartedEvent? _pendingRunStarted;
         private int _processedHistoryEntries;
         private long _timelineSequence;
         private int _turnIndex;
@@ -82,22 +84,22 @@ namespace STS2RitsuMetrics.Core
             CaptureBridge.FallbackParentResolver = null;
             CaptureBridge.EffectMaterialized = null;
             CaptureBridge.DamageRequestCompleted = null;
+            ModData.HistoryReady -= OnHistoryReady;
         }
 
         internal void Initialize()
         {
+            ModData.HistoryReady += OnHistoryReady;
             CaptureBridge.IsCombatActive = () => _captureActive;
             CaptureBridge.FallbackParentResolver = () => _activeTurnEventId;
             CaptureBridge.EffectMaterialized = OnEffectMaterialized;
             CaptureBridge.DamageRequestCompleted = OnDamageRequestCompleted;
 
             Subscribe<ProfileDataReadyEvent>(_ => MetricsRepository.ReconcileLegacyMultiplayerRuns());
-            Subscribe<RunStartedEvent>(evt =>
-                StartNewRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc));
+            Subscribe<RunStartedEvent>(OnRunStarted);
             Subscribe<GameReadyEvent>(_ => TimelineCapturePatches.RefreshModelPatches());
             Subscribe<MainMenuReadyEvent>(_ => OnMainMenuReady());
-            Subscribe<RunLoadedEvent>(evt =>
-                ResumeRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc));
+            Subscribe<RunLoadedEvent>(OnRunLoaded);
             Subscribe<RunSavedEvent>(OnRunSaved, false);
             Subscribe<RunEndedEvent>(EndRun);
             Subscribe<CombatStartingEvent>(StartCombat);
@@ -178,6 +180,47 @@ namespace STS2RitsuMetrics.Core
             where TEvent : struct, IFrameworkLifecycleEvent
         {
             _subscriptions.Add(RitsuLibFramework.SubscribeLifecycle(handler, replayLatest));
+        }
+
+        private void OnRunStarted(RunStartedEvent evt)
+        {
+            if (!ModData.IsHistoryReady)
+            {
+                _pendingRunStarted = evt;
+                _pendingRunLoaded = null;
+                Main.Logger.Debug("Deferring analytics run start until saved history finishes loading.");
+                return;
+            }
+
+            StartNewRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc);
+        }
+
+        private void OnRunLoaded(RunLoadedEvent evt)
+        {
+            if (!ModData.IsHistoryReady)
+            {
+                _pendingRunLoaded = evt;
+                _pendingRunStarted = null;
+                Main.Logger.Debug("Deferring analytics run restore until saved history finishes loading.");
+                return;
+            }
+
+            ResumeRun(evt.RunState, evt.IsMultiplayer, evt.IsDaily, evt.OccurredAtUtc);
+        }
+
+        private void OnHistoryReady()
+        {
+            if (_pendingRunLoaded is { } loaded)
+            {
+                _pendingRunLoaded = null;
+                ResumeRun(loaded.RunState, loaded.IsMultiplayer, loaded.IsDaily, loaded.OccurredAtUtc);
+                return;
+            }
+
+            if (_pendingRunStarted is not { } started)
+                return;
+            _pendingRunStarted = null;
+            StartNewRun(started.RunState, started.IsMultiplayer, started.IsDaily, started.OccurredAtUtc);
         }
 
         private void StartNewRun(IRunState runState, bool isMultiplayer, bool isDaily, DateTimeOffset occurredAtUtc)
