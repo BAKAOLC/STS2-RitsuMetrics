@@ -11,7 +11,8 @@ namespace STS2RitsuMetrics.Ui
         private const int PopupRowSeparation = 2;
 
         private readonly List<string> _items = [];
-        private readonly PopupPanel _popup;
+        private readonly PanelContainer _popup;
+        private readonly Control _popupOverlay;
         private readonly VBoxContainer _rows;
         private readonly DashboardScrollContainer _scroll;
         private DashboardStyleDefinition? _style;
@@ -21,13 +22,17 @@ namespace STS2RitsuMetrics.Ui
             Alignment = HorizontalAlignment.Left;
             TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
             ClipText = true;
-            _popup = new()
+            _popupOverlay = new()
             {
-                Borderless = true,
-                Unresizable = true,
-                TransparentBg = true,
-                WrapControls = true,
+                LayoutMode = 1,
+                AnchorsPreset = (int)LayoutPreset.FullRect,
+                MouseFilter = MouseFilterEnum.Stop,
+                Visible = false,
+                ZIndex = 4096,
             };
+            _popupOverlay.GuiInput += OnPopupOverlayInput;
+            _popup = new() { MouseFilter = MouseFilterEnum.Stop };
+            _popupOverlay.AddChild(_popup);
             var margin = new MarginContainer
             {
                 LayoutMode = 1,
@@ -46,8 +51,8 @@ namespace STS2RitsuMetrics.Ui
             _rows = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill };
             _rows.AddThemeConstantOverride("separation", PopupRowSeparation);
             _scroll.SetContent(_rows);
-            AddChild(_popup);
             Pressed += TogglePopup;
+            VisibilityChanged += OnVisibilityChanged;
             ApplyStyle();
         }
 
@@ -65,6 +70,19 @@ namespace STS2RitsuMetrics.Ui
 
         public event Action<long>? ItemSelected;
 
+        public override void _Ready()
+        {
+            ResolvePopupParent().AddChild(_popupOverlay);
+        }
+
+        public override void _ExitTree()
+        {
+            if (!IsInstanceValid(_popupOverlay) || _popupOverlay.GetParent() == null)
+                return;
+            _popupOverlay.GetParent().RemoveChild(_popupOverlay);
+            _popupOverlay.QueueFree();
+        }
+
         public void AddItem(string text)
         {
             _items.Add(text);
@@ -76,7 +94,7 @@ namespace STS2RitsuMetrics.Ui
 
         public void Clear()
         {
-            _popup.Hide();
+            HidePopup();
             _items.Clear();
             Selected = -1;
             Text = string.Empty;
@@ -106,9 +124,9 @@ namespace STS2RitsuMetrics.Ui
 
         private void TogglePopup()
         {
-            if (_popup.Visible)
+            if (_popupOverlay.Visible)
             {
-                _popup.Hide();
+                HidePopup();
                 return;
             }
 
@@ -139,9 +157,10 @@ namespace STS2RitsuMetrics.Ui
                 ? (int)Math.Ceiling(anchor.End.Y + 4f)
                 : (int)Math.Floor(anchor.Position.Y - height - 4f);
             var size = new Vector2I(width, height);
-            _popup.MinSize = Vector2I.Zero;
-            _popup.MaxSize = size;
-            _popup.Popup(new Rect2I(new(x, y), size));
+            _popupOverlay.MoveToFront();
+            _popup.Position = new(x, y);
+            _popup.Size = size;
+            _popupOverlay.Show();
             if (Selected >= 0 && Selected < _rows.GetChildCount() && _rows.GetChild(Selected) is Control selectedRow)
                 Callable.From(() => FocusSelectedRow(selectedRow)).CallDeferred();
         }
@@ -168,17 +187,47 @@ namespace STS2RitsuMetrics.Ui
 
         private void SelectFromPopup(int index)
         {
-            _popup.Hide();
+            HidePopup();
             Select(index);
             ItemSelected?.Invoke(index);
         }
 
         private void FocusSelectedRow(Control row)
         {
-            if (!_popup.Visible || !IsInstanceValid(row))
+            if (!_popupOverlay.Visible || !IsInstanceValid(row))
                 return;
             _scroll.EnsureControlVisible(row);
             row.GrabFocus();
+        }
+
+        private void HidePopup()
+        {
+            if (!_popupOverlay.Visible)
+                return;
+            _popupOverlay.Hide();
+            if (IsVisibleInTree())
+                GrabFocus();
+        }
+
+        private void OnPopupOverlayInput(InputEvent input)
+        {
+            if (input is InputEventMouseButton { Pressed: true } ||
+                input is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape })
+                HidePopup();
+        }
+
+        private void OnVisibilityChanged()
+        {
+            if (!IsVisibleInTree())
+                HidePopup();
+        }
+
+        private Node ResolvePopupParent()
+        {
+            for (var current = GetParent(); current != null; current = current.GetParent())
+                if (current is CanvasLayer)
+                    return current;
+            return GetTree().Root;
         }
 
         private Theme? ResolveTypographyTheme()

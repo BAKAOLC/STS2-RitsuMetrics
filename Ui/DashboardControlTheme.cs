@@ -107,9 +107,9 @@ namespace STS2RitsuMetrics.Ui
             button.AddThemeStyleboxOverride("disabled", Box("0C121BDC", "283647B8", 1));
         }
 
-        public static void ApplySelectionPopup(PopupPanel popup, DashboardStyleDefinition? dashboardStyle = null)
+        public static void ApplySelectionPopup(PanelContainer popup,
+            DashboardStyleDefinition? dashboardStyle = null)
         {
-            popup.TransparentBg = true;
             var panel = Box(dashboardStyle?.BackgroundColor ?? "0B111BFC",
                 dashboardStyle?.BorderColor ?? "4B6686F4", 1, 7);
             panel.ContentMarginLeft = 0f;
