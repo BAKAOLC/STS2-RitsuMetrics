@@ -23,6 +23,16 @@ namespace STS2RitsuMetrics.Ui
             };
         }
 
+        internal static decimal AppliedDamage(DamageBreakdown damage)
+        {
+            return damage.HpLost + damage.BlockedAmount;
+        }
+
+        internal static decimal ResolvedHitDamage(DamageBreakdown damage)
+        {
+            return AppliedDamage(damage) + damage.OverkillAmount;
+        }
+
         internal static int FontSize(
             IReadOnlyDictionary<string, string> parameters,
             int fallback)

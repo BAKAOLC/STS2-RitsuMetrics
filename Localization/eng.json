@@ -223,7 +223,7 @@
   "analysis.combatDetails": "Combat details",
   "analysis.runTrendSummary": "{0} combats · {1} total damage",
   "analysis.runTrendPoint": "#{0} · Act {1} · {2} · {3} rounds",
-  "analysis.recordHighestHit": "Highest effective hit",
+  "analysis.recordHighestHit": "Highest hit",
   "analysis.recordLargestRequest": "Largest requested hit",
   "analysis.recordBestTurn": "Best damage turn",
   "analysis.recordBestCombat": "Best player combat",

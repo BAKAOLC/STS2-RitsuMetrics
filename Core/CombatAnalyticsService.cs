@@ -661,7 +661,7 @@ namespace STS2RitsuMetrics.Core
             var results = evt.Attack.Results.SelectMany(result => result).ToArray();
             AddTimeline(CombatTimelineKind.Attack, TimelineEventPhase.Completed, "attack.end", source.DisplayName,
                 GameDescriptorFactory.CreatureOrNull(evt.Attack.Attacker), source: source,
-                value: results.Sum(result => result.UnblockedDamage + result.BlockedDamage),
+                value: results.Sum(result => result.UnblockedDamage + result.BlockedDamage + result.OverkillDamage),
                 occurredAtUtc: evt.OccurredAtUtc,
                 parentEventId: scope.EventId, bypassScope: true,
                 details: Details(("hits", results.Length.ToString(CultureInfo.InvariantCulture))));

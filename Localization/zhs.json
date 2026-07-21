@@ -223,7 +223,7 @@
   "analysis.combatDetails": "战斗明细",
   "analysis.runTrendSummary": "{0} 场战斗 · 总伤害 {1}",
   "analysis.runTrendPoint": "第 {0} 场 · 第 {1} 章 · {2} · {3} 回合",
-  "analysis.recordHighestHit": "最高有效单次伤害",
+  "analysis.recordHighestHit": "最高一击",
   "analysis.recordLargestRequest": "最高请求伤害",
   "analysis.recordBestTurn": "最佳伤害回合",
   "analysis.recordBestCombat": "最佳玩家单场",

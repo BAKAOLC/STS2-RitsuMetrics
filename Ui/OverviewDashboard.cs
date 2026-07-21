@@ -135,6 +135,8 @@ namespace STS2RitsuMetrics.Ui
                 kpis.AddChild(Kpi("overview.maxHit", "Peak hit", maximumHit, style.WarningColor, style));
                 kpis.AddChild(Kpi("analysis.damagePerEnergy", "Damage / energy",
                     energy > 0m ? damage / energy : 0m, accent, style));
+                kpis.AddChild(Kpi("analysis.overkill", "Overkill", Metric(player, MetricIds.Overkill),
+                    style.WarningColor, style));
                 body.AddChild(kpis);
                 grid.AddChild(Surface(body, style, accent, 9));
             }
@@ -361,7 +363,8 @@ namespace STS2RitsuMetrics.Ui
             AddRecord("overview.totalDamage", "Total damage",
                 snapshot.Players.Sum(player => Metric(player, MetricIds.DamageDealt)), style.NegativeColor);
             AddRecord("overview.maxHit", "Peak hit",
-                outgoingDamage.Select(item => DamageOutput(item.Damage!)).DefaultIfEmpty().Max(),
+                outgoingDamage.Select(item => DashboardPresentation.ResolvedHitDamage(item.Damage!))
+                    .DefaultIfEmpty().Max(),
                 style.NegativeColor);
             AddRecord("overview.maxRequest", "Peak request",
                 outgoingDamage.Select(item => item.Damage!.RequestedAmount).DefaultIfEmpty().Max(), Accent(style, 1));
@@ -494,15 +497,19 @@ namespace STS2RitsuMetrics.Ui
             if (timelineEvent.Damage == null)
                 return 0m;
             if (timelineEvent.Damage.AttributionShares is not { Count: > 0 } shares)
-                return timelineEvent.Actor?.Key == playerKey ? DamageOutput(timelineEvent.Damage) : 0m;
+                return timelineEvent.Actor?.Key == playerKey
+                    ? DashboardPresentation.ResolvedHitDamage(timelineEvent.Damage)
+                    : 0m;
 
             var totalShares = shares.Sum(share => share.EffectiveContribution);
             if (totalShares > 0m)
-                return DamageOutput(timelineEvent.Damage) * shares
+                return DashboardPresentation.ResolvedHitDamage(timelineEvent.Damage) * shares
                     .Where(share => share.Contributor.Key == playerKey)
                     .Sum(share => share.EffectiveContribution) / totalShares;
 
-            return timelineEvent.Actor?.Key == playerKey ? DamageOutput(timelineEvent.Damage) : 0m;
+            return timelineEvent.Actor?.Key == playerKey
+                ? DashboardPresentation.ResolvedHitDamage(timelineEvent.Damage)
+                : 0m;
         }
 
         private static decimal TurnValue(
@@ -513,7 +520,7 @@ namespace STS2RitsuMetrics.Ui
             {
                 OverviewSection.Offense => events.Where(item => item is
                         { Damage: not null, Target: null or { Kind: not AnalyticsEntityKind.Player } })
-                    .Sum(item => DamageOutput(item.Damage!)),
+                    .Sum(item => DashboardPresentation.AppliedDamage(item.Damage!)),
                 OverviewSection.Defense => events.Where(item => item is
                         { Damage: not null, Target.Kind: AnalyticsEntityKind.Player })
                     .Sum(item => item.Damage!.HpLost + item.Damage.BlockedAmount),
@@ -525,11 +532,6 @@ namespace STS2RitsuMetrics.Ui
                                    DamageContributionRole.Modifier)
                     .Sum(item => Math.Abs(item.EffectiveContribution)),
             };
-        }
-
-        private static decimal DamageOutput(DamageBreakdown damage)
-        {
-            return damage.HpLost + damage.BlockedAmount;
         }
 
         private static OverviewSource[] AggregateSources(

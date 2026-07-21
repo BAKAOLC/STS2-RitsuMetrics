@@ -517,13 +517,13 @@ namespace STS2RitsuMetrics.Ui
             var damageEvents = timeline.Where(item => item.Damage?.AttributionShares?.Any(share =>
                 share.Contributor.Kind == AnalyticsEntityKind.Player) == true).ToArray();
             var records = new List<RecordRow>();
-            AddMaximum(records, "analysis.recordHighestHit", "Highest effective hit", damageEvents,
-                item => DamageOutput(item.Damage!), DamageEventLabel);
+            AddMaximum(records, "analysis.recordHighestHit", "Highest hit", damageEvents,
+                item => DashboardPresentation.ResolvedHitDamage(item.Damage!), DamageEventLabel);
             AddMaximum(records, "analysis.recordLargestRequest", "Largest requested hit", damageEvents,
                 item => item.Damage!.RequestedAmount, DamageEventLabel);
             var turnDamage = damageEvents.GroupBy(item => (item.CombatId, item.TurnIndex))
                 .Select(group => new NamedValue($"T{group.Key.TurnIndex}",
-                    group.Sum(item => DamageOutput(item.Damage!))))
+                    group.Sum(item => DashboardPresentation.AppliedDamage(item.Damage!))))
                 .ToArray();
             AddMaximum(records, "analysis.recordBestTurn", "Best damage turn", turnDamage, item => item.Value,
                 item => item.Name);
@@ -760,7 +760,7 @@ namespace STS2RitsuMetrics.Ui
             var events = turn.ToArray();
             return new(turn.Key,
                 events.Where(item => item.Damage != null && item.Target?.Kind != AnalyticsEntityKind.Player)
-                    .Sum(item => DamageOutput(item.Damage!)),
+                    .Sum(item => DashboardPresentation.AppliedDamage(item.Damage!)),
                 events.Where(item => item is { Damage: not null, Target.Kind: AnalyticsEntityKind.Player })
                     .Sum(item => item.Damage!.HpLost),
                 events.Where(item => item is
@@ -775,11 +775,6 @@ namespace STS2RitsuMetrics.Ui
                 events.Any(item => item.IsExtraTurn),
                 events.FirstOrDefault(item => item.Kind == CombatTimelineKind.Turn)?.Side ?? TimelineTurnSide.None,
                 events.Length);
-        }
-
-        private static decimal DamageOutput(DamageBreakdown damage)
-        {
-            return damage.HpLost + damage.BlockedAmount;
         }
 
         private static string TurnLabel(int turn)
