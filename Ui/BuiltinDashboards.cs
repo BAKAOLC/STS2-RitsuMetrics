@@ -386,6 +386,38 @@ namespace STS2RitsuMetrics.Ui
             }
         }
 
+        protected static GridContainer ResponsiveGrid(
+            int maximumColumns,
+            float minimumColumnWidth,
+            int horizontalSeparation = 8,
+            int verticalSeparation = 8)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(maximumColumns, 1);
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(minimumColumnWidth, 0f);
+            var grid = new GridContainer
+            {
+                Columns = 1,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            };
+            grid.AddThemeConstantOverride("h_separation", horizontalSeparation);
+            grid.AddThemeConstantOverride("v_separation", verticalSeparation);
+            grid.Resized += UpdateColumns;
+            grid.Ready += UpdateColumns;
+            return grid;
+
+            void UpdateColumns()
+            {
+                if (!GodotObject.IsInstanceValid(grid) || grid.Size.X <= 0f)
+                    return;
+                var availableColumns = (int)Math.Floor(
+                    (grid.Size.X + horizontalSeparation) / (minimumColumnWidth + horizontalSeparation));
+                var childLimit = Math.Max(1, grid.GetChildCount());
+                var columns = Math.Clamp(availableColumns, 1, Math.Min(maximumColumns, childLimit));
+                if (grid.Columns != columns)
+                    grid.Columns = columns;
+            }
+        }
+
         protected static IReadOnlyList<CombatTimelineEvent> Timeline(CombatSnapshot? snapshot)
         {
             return snapshot?.Timeline ?? [];
@@ -1592,18 +1624,19 @@ namespace STS2RitsuMetrics.Ui
             if (_turn.ItemCount == 0 || !_turnIndexes.SequenceEqual(turns))
             {
                 _turn.Clear();
-                _turn.AddItem(ModLocalization.Get("dashboard.allTurns", "All turns"));
+                _turn.AddLocalizedItem("dashboard.allTurns", "All turns");
                 foreach (var turn in turns)
-                    _turn.AddItem(turn <= 0
-                        ? ModLocalization.Get("dashboard.setup", "Setup")
-                        : ModLocalization.Format("dashboard.turn", "Turn {0}", turn));
+                    if (turn <= 0)
+                        _turn.AddLocalizedItem("dashboard.setup", "Setup");
+                    else
+                        _turn.AddLocalizedItem("dashboard.turn", "Turn {0}", turn);
                 _turnIndexes = turns;
             }
 
             if (_player.ItemCount == 0 || !_playerKeys.SequenceEqual(playerKeys))
             {
                 _player.Clear();
-                _player.AddItem(ModLocalization.Get("overlay.allPlayers", "All players"));
+                _player.AddLocalizedItem("overlay.allPlayers", "All players");
                 foreach (var player in players)
                     _player.AddItem(player.DisplayName);
                 _playerKeys = playerKeys;

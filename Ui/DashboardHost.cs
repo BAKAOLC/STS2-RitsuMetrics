@@ -8,6 +8,7 @@ using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
 using STS2RitsuMetrics.Data;
 using STS2RitsuMetrics.Data.Models;
+using STS2RitsuMetrics.Localization;
 
 namespace STS2RitsuMetrics.Ui
 {
@@ -72,6 +73,7 @@ namespace STS2RitsuMetrics.Ui
             _registry.CloseRequested += CloseWindow;
             Main.Collectors.SnapshotChanged += MarkAllDirty;
             RitsuShellThemeRuntime.ThemeChanged += OnShellThemeChanged;
+            ModLocalization.Changed += OnLocalizationChanged;
             LoadWindows();
             DrainOpenRequests();
             if (_windows.Count == 0 && ModData.Settings.OverlayEnabled)
@@ -97,6 +99,7 @@ namespace STS2RitsuMetrics.Ui
             _registry.CloseRequested -= CloseWindow;
             Main.Collectors.SnapshotChanged -= MarkAllDirty;
             RitsuShellThemeRuntime.ThemeChanged -= OnShellThemeChanged;
+            ModLocalization.Changed -= OnLocalizationChanged;
             foreach (var window in _windows.Values)
                 window.DisposeRenderer();
             _analysisCenter?.DisposeRenderer();
@@ -426,6 +429,24 @@ namespace STS2RitsuMetrics.Ui
             if (!IsInsideTree())
                 return;
             Callable.From(ApplyTypographyTheme).CallDeferred();
+        }
+
+        private void OnLocalizationChanged()
+        {
+            if (!IsInsideTree())
+                return;
+            Callable.From(RefreshLocalizedOptions).CallDeferred();
+        }
+
+        private void RefreshLocalizedOptions()
+        {
+            if (!IsInsideTree())
+                return;
+            foreach (var window in _windows.Values)
+                window.RebuildMenus();
+            _manager?.RebuildOptions();
+            _analysisCenter?.RebuildOptions();
+            MarkAllDirty();
         }
 
         private void ApplyTypographyTheme()

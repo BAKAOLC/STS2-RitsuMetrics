@@ -2,6 +2,7 @@
 
 using Godot;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Localization;
 
 namespace STS2RitsuMetrics.Ui
 {
@@ -11,6 +12,7 @@ namespace STS2RitsuMetrics.Ui
         private const int PopupRowSeparation = 2;
 
         private readonly List<string> _items = [];
+        private readonly List<(string Key, string Fallback, object[]? Arguments)?> _localizedItems = [];
         private readonly PanelContainer _popup;
         private readonly Control _popupOverlay;
         private readonly VBoxContainer _rows;
@@ -26,12 +28,11 @@ namespace STS2RitsuMetrics.Ui
             {
                 LayoutMode = 1,
                 AnchorsPreset = (int)LayoutPreset.FullRect,
-                MouseFilter = MouseFilterEnum.Stop,
+                MouseFilter = MouseFilterEnum.Ignore,
                 Visible = false,
                 ZIndex = 4096,
             };
-            _popupOverlay.GuiInput += OnPopupOverlayInput;
-            _popup = new() { MouseFilter = MouseFilterEnum.Stop };
+            _popup = new() { MouseFilter = MouseFilterEnum.Pass };
             _popupOverlay.AddChild(_popup);
             var margin = new MarginContainer
             {
@@ -73,10 +74,34 @@ namespace STS2RitsuMetrics.Ui
         public override void _Ready()
         {
             ResolvePopupParent().AddChild(_popupOverlay);
+            ModLocalization.Changed += OnLocalizationChanged;
+        }
+
+        public override void _Input(InputEvent input)
+        {
+            if (!_popupOverlay.Visible)
+                return;
+
+            switch (input)
+            {
+                case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouse:
+                    HandlePointerPressed(mouse.Position);
+                    GetViewport().SetInputAsHandled();
+                    break;
+                case InputEventScreenTouch { Pressed: true } touch:
+                    HandlePointerPressed(touch.Position);
+                    GetViewport().SetInputAsHandled();
+                    break;
+                case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape }:
+                    HidePopup();
+                    GetViewport().SetInputAsHandled();
+                    break;
+            }
         }
 
         public override void _ExitTree()
         {
+            ModLocalization.Changed -= OnLocalizationChanged;
             if (!IsInstanceValid(_popupOverlay))
                 return;
             _popupOverlay.QueueFree();
@@ -85,6 +110,28 @@ namespace STS2RitsuMetrics.Ui
         public void AddItem(string text)
         {
             _items.Add(text);
+            _localizedItems.Add(null);
+            InitializeSelection(text);
+        }
+
+        internal void AddLocalizedItem(string key, string fallback)
+        {
+            var text = ModLocalization.Get(key, fallback);
+            _items.Add(text);
+            _localizedItems.Add((key, fallback, null));
+            InitializeSelection(text);
+        }
+
+        internal void AddLocalizedItem(string key, string fallback, params object[] arguments)
+        {
+            var text = ModLocalization.Format(key, fallback, arguments);
+            _items.Add(text);
+            _localizedItems.Add((key, fallback, arguments));
+            InitializeSelection(text);
+        }
+
+        private void InitializeSelection(string text)
+        {
             if (Selected >= 0)
                 return;
             Selected = 0;
@@ -95,6 +142,7 @@ namespace STS2RitsuMetrics.Ui
         {
             HidePopup();
             _items.Clear();
+            _localizedItems.Clear();
             Selected = -1;
             Text = string.Empty;
             ClearRows();
@@ -199,26 +247,49 @@ namespace STS2RitsuMetrics.Ui
             row.GrabFocus();
         }
 
+        private void HandlePointerPressed(Vector2 position)
+        {
+            if (!_popup.GetGlobalRect().HasPoint(position))
+            {
+                HidePopup();
+                return;
+            }
+
+            for (var index = 0; index < _rows.GetChildCount(); index++)
+                if (_rows.GetChild(index) is Control row && row.GetGlobalRect().HasPoint(position))
+                {
+                    SelectFromPopup(index);
+                    return;
+                }
+        }
+
         private void HidePopup()
         {
             if (!_popupOverlay.Visible)
                 return;
             _popupOverlay.Hide();
-            if (IsVisibleInTree())
+            if (IsVisibleInTree() && GetFocusModeWithOverride() != FocusModeEnum.None)
                 GrabFocus();
-        }
-
-        private void OnPopupOverlayInput(InputEvent input)
-        {
-            if (input is InputEventMouseButton { Pressed: true } ||
-                input is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape })
-                HidePopup();
         }
 
         private void OnVisibilityChanged()
         {
             if (!IsVisibleInTree())
                 HidePopup();
+        }
+
+        private void OnLocalizationChanged()
+        {
+            for (var index = 0; index < _localizedItems.Count; index++)
+                if (_localizedItems[index] is { } localized)
+                    _items[index] = localized.Arguments == null
+                        ? ModLocalization.Get(localized.Key, localized.Fallback)
+                        : ModLocalization.Format(localized.Key, localized.Fallback, localized.Arguments);
+
+            if (Selected >= 0 && Selected < _items.Count)
+                Text = _items[Selected];
+            if (_popupOverlay.Visible)
+                RebuildRows();
         }
 
         private Node ResolvePopupParent()

@@ -140,8 +140,8 @@ namespace STS2RitsuMetrics.Ui
             selectors.AddChild(SelectorField(ModLocalization.Get("analysis.page", "Analysis page"), _dashboard,
                 1.45f));
             _scope = Selector(ModLocalization.Get("analysis.range", "Selected combat or whole run"));
-            _scope.AddItem(ModLocalization.Get("analysis.selectedCombat", "Selected combat"));
-            _scope.AddItem(ModLocalization.Get("analysis.wholeRun", "Whole run"));
+            _scope.AddLocalizedItem("analysis.selectedCombat", "Selected combat");
+            _scope.AddLocalizedItem("analysis.wholeRun", "Whole run");
             _scope.ItemSelected += _ =>
             {
                 _historyHash = 0;

@@ -47,13 +47,7 @@ namespace STS2RitsuMetrics.Ui
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.keyMetrics", "Key metrics"),
                 ModLocalization.Get("overview.keyMetrics.meta", "Damage · survival · actions · support"),
                 context.Style, Accent(context.Style, 1)));
-            var metricSections = new GridContainer
-            {
-                Columns = 2,
-                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            };
-            metricSections.AddThemeConstantOverride("h_separation", 8);
-            metricSections.AddThemeConstantOverride("v_separation", 8);
+            var metricSections = ResponsiveGrid(2, 330f);
             foreach (var definition in Sections)
                 metricSections.AddChild(BuildMetricSummary(players, snapshot, definition, context.Style));
             Rows.AddChild(metricSections);
@@ -61,9 +55,7 @@ namespace STS2RitsuMetrics.Ui
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatFlow", "Combat flow"),
                 ModLocalization.Get("overview.combatFlow.meta", "Damage sources, composition and turn trends"),
                 context.Style, Accent(context.Style, 3)));
-            var flow = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            flow.AddThemeConstantOverride("h_separation", 8);
-            flow.AddThemeConstantOverride("v_separation", 8);
+            var flow = ResponsiveGrid(2, 280f);
             flow.AddChild(BuildTopSources(players, MetricIds.DamageDealt, "overview.topSources.ad",
                 "Top AD sources", context.Style, 0));
             flow.AddChild(BuildTopSources(players, MetricIds.DamageContribution, "overview.topSources.rd",
@@ -76,8 +68,7 @@ namespace STS2RitsuMetrics.Ui
             Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatAnalysis", "Combat analysis"),
                 ModLocalization.Get("overview.combatAnalysis.meta", "Records and event composition"), context.Style,
                 Accent(context.Style, 4)));
-            var analysis = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            analysis.AddThemeConstantOverride("h_separation", 8);
+            var analysis = ResponsiveGrid(2, 280f);
             analysis.AddChild(BuildCombatRecords(snapshot, context.Style));
             analysis.AddChild(BuildEventComposition(snapshot, context.Style));
             Rows.AddChild(analysis);
@@ -94,13 +85,7 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style,
             bool singleLine)
         {
-            var grid = new GridContainer
-            {
-                Columns = 2,
-                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-            };
-            grid.AddThemeConstantOverride("h_separation", 8);
-            grid.AddThemeConstantOverride("v_separation", 8);
+            var grid = ResponsiveGrid(2, 320f);
             for (var index = 0; index < players.Length; index++)
             {
                 var player = players[index];
@@ -111,9 +96,7 @@ namespace STS2RitsuMetrics.Ui
                 var body = new VBoxContainer();
                 body.AddThemeConstantOverride("separation", 6);
                 body.AddChild(PlayerHeader(player, index + 1, damage, totalDamage, accent, style, singleLine));
-                var kpis = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-                kpis.AddThemeConstantOverride("h_separation", 5);
-                kpis.AddThemeConstantOverride("v_separation", 5);
+                var kpis = ResponsiveGrid(4, 112f, 5, 5);
                 kpis.AddChild(Kpi("overview.appliedDamage", "Applied damage (AD)", damage, accent, style));
                 kpis.AddChild(Kpi("overview.responsibilityDamage", "Responsibility damage (RD)",
                     MetricForDisplay(player, MetricIds.DamageContribution), Accent(style, 4), style));
@@ -140,13 +123,6 @@ namespace STS2RitsuMetrics.Ui
                 body.AddChild(kpis);
                 grid.AddChild(Surface(body, style, accent, 9));
             }
-
-            if (players.Length % 2 != 0)
-                grid.AddChild(new Control
-                {
-                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
-                    MouseFilter = Control.MouseFilterEnum.Ignore,
-                });
 
             return grid;
         }
@@ -357,9 +333,7 @@ namespace STS2RitsuMetrics.Ui
                 { Damage: not null, Target.Kind: AnalyticsEntityKind.Player }).ToArray();
             var survival = snapshot.Players.Aggregate(default(SurvivalStatistics),
                 (total, player) => total + SnapshotStatistics.Survival(snapshot, player.PlayerNetId));
-            var metrics = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            metrics.AddThemeConstantOverride("h_separation", 12);
-            metrics.AddThemeConstantOverride("v_separation", 8);
+            var metrics = ResponsiveGrid(4, 110f, 12, 8);
             AddRecord("overview.totalDamage", "Total damage",
                 snapshot.Players.Sum(player => Metric(player, MetricIds.DamageDealt)), style.NegativeColor);
             AddRecord("overview.maxHit", "Peak hit",

@@ -133,8 +133,7 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            var charts = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            charts.AddThemeConstantOverride("h_separation", 8);
+            var charts = ResponsiveGrid(2, 280f);
             charts.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources.ad", "Top AD sources"),
                 sources.Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m)
                     .OrderByDescending(source => SourceMetric(source, MetricIds.DamageDealt)).Take(12)
@@ -362,8 +361,7 @@ namespace STS2RitsuMetrics.Ui
 
             var turns = Timeline(snapshot).GroupBy(item => item.TurnIndex).OrderBy(group => group.Key)
                 .Select(SummarizeTurn).ToArray();
-            var charts = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            charts.AddThemeConstantOverride("h_separation", 8);
+            var charts = ResponsiveGrid(2, 280f);
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damageDealt", "Damage"),
                 turns.Select(turn => new DashboardLineDatum(TurnLabel(turn.Index), turn.Damage)),
                 context.Style.NegativeColor, context.Style));
@@ -433,9 +431,7 @@ namespace STS2RitsuMetrics.Ui
             }
 
             var ordered = combats.OrderBy(item => item.StartedAtUtc).ToArray();
-            var charts = new GridContainer { Columns = 2, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            charts.AddThemeConstantOverride("h_separation", 8);
-            charts.AddThemeConstantOverride("v_separation", 8);
+            var charts = ResponsiveGrid(2, 280f);
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.damageDealt", "Damage"),
                 CombatTrend(ordered, TotalDamage),
                 context.Style.NegativeColor, context.Style));
@@ -672,9 +668,7 @@ namespace STS2RitsuMetrics.Ui
 
         private static GridContainer MetricGrid(DashboardStyleDefinition style, IReadOnlyList<StatCell> cells)
         {
-            var grid = new GridContainer { Columns = 4, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-            grid.AddThemeConstantOverride("h_separation", 12);
-            grid.AddThemeConstantOverride("v_separation", 9);
+            var grid = ResponsiveGrid(4, 112f, 12, 9);
             foreach (var cell in cells)
             {
                 var box = new VBoxContainer

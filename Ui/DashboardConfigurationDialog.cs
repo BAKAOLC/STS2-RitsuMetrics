@@ -119,18 +119,18 @@ namespace STS2RitsuMetrics.Ui
             content.AddChild(fields);
             _metric = AddFieldCell(fields, ModLocalization.Get("dashboard.metric", "Metric"), out _metricField);
             _scope = AddFieldCell(fields, ModLocalization.Get("dashboard.range", "Range"), out _);
-            _scope.AddItem(ModLocalization.Get("overlay.currentCombat", "Current combat"));
-            _scope.AddItem(ModLocalization.Get("overlay.currentRun", "Current run"));
+            _scope.AddLocalizedItem("overlay.currentCombat", "Current combat");
+            _scope.AddLocalizedItem("overlay.currentRun", "Current run");
             _fontSize = AddFieldCell(fields, ModLocalization.Get("dashboard.fontSize", "Font size"), out _);
             foreach (var value in _fontSizes)
                 _fontSize.AddItem(value);
             _layout = AddFieldCell(fields, ModLocalization.Get("dashboard.layout", "Layout"), out _);
-            _layout.AddItem(ModLocalization.Get("dashboard.layout.standard", "Standard"));
-            _layout.AddItem(ModLocalization.Get("dashboard.layout.singleLine", "Single line"));
+            _layout.AddLocalizedItem("dashboard.layout.standard", "Standard");
+            _layout.AddLocalizedItem("dashboard.layout.singleLine", "Single line");
             _summons = AddFieldCell(fields,
                 ModLocalization.Get("dashboard.summonDisplay", "Summon display"), out _summonField);
-            _summons.AddItem(ModLocalization.Get("dashboard.summonDisplay.merge", "Merge into owner"));
-            _summons.AddItem(ModLocalization.Get("dashboard.summonDisplay.split", "Show separately"));
+            _summons.AddLocalizedItem("dashboard.summonDisplay.merge", "Merge into owner");
+            _summons.AddLocalizedItem("dashboard.summonDisplay.split", "Show separately");
             _windowOpacity = AddSliderFieldCell(fields,
                 ModLocalization.Get("dashboard.windowOpacity", "Window opacity"), out _);
             _windowOpacity.Configure(20, 100, 1);
