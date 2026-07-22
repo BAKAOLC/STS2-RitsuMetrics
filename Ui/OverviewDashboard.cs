@@ -333,7 +333,7 @@ namespace STS2RitsuMetrics.Ui
                 { Damage: not null, Target.Kind: AnalyticsEntityKind.Player }).ToArray();
             var survival = snapshot.Players.Aggregate(default(SurvivalStatistics),
                 (total, player) => total + SnapshotStatistics.Survival(snapshot, player.PlayerNetId));
-            var metrics = ResponsiveGrid(4, 110f, 12, 8);
+            var metrics = ResponsiveGrid(4, 110f, 12);
             AddRecord("overview.totalDamage", "Total damage",
                 snapshot.Players.Sum(player => Metric(player, MetricIds.DamageDealt)), style.NegativeColor);
             AddRecord("overview.maxHit", "Peak hit",

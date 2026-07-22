@@ -161,7 +161,7 @@ namespace STS2RitsuMetrics.Core
         {
             try
             {
-                if (!model.TryResolveTitle(out var title))
+                if (!model.TryResolveTitle(out var title) || !title.Exists())
                     return fallback;
                 var text = title.GetFormattedText();
                 return string.IsNullOrWhiteSpace(text) ? fallback : text;

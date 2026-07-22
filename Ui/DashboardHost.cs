@@ -24,11 +24,14 @@ namespace STS2RitsuMetrics.Ui
         private AnalysisCenter? _analysisCenter;
         private CombatSnapshot? _cachedCombatSnapshot;
         private RunSnapshot? _cachedRun;
-        private CombatSnapshot? _cachedRunSnapshot;
         private long _cachedSnapshotRevision = -1;
         private bool _capstoneInUse;
         private double _dashboardDataRefreshDelay;
         private Task<DashboardDataCache>? _dashboardDataRefreshTask;
+        private bool _localizationRefreshPending;
+        private CombatSnapshot? _localizedCombatSnapshot;
+        private RunSnapshot? _localizedRun;
+        private CombatSnapshot? _localizedRunSnapshot;
         private DashboardManagerPanel? _manager;
         private DashboardRegistry _registry = null!;
         private int _settingsHash;
@@ -78,12 +81,7 @@ namespace STS2RitsuMetrics.Ui
             DrainOpenRequests();
             if (_windows.Count == 0 && ModData.Settings.OverlayEnabled)
                 OpenWindow(BuiltInDashboardIds.DamageContribution, new());
-            _manager = new() { Visible = false, Theme = _typographyTheme };
-            _manager.Initialize(this, _registry);
-            AddChild(_manager);
-            _analysisCenter = new() { Theme = _typographyTheme };
-            _analysisCenter.Initialize(_registry);
-            AddChild(_analysisCenter);
+            CreateControlSurfaces();
             ApplyTypographyTheme();
             SetProcessUnhandledInput(true);
             SetProcessInput(true);
@@ -359,11 +357,28 @@ namespace STS2RitsuMetrics.Ui
             EnsureDashboardDataCache();
             lock (_dashboardDataGate)
             {
+                _localizedRun ??= _cachedRun is null ? null : LocalizedSnapshotResolver.Resolve(_cachedRun);
+                _localizedCombatSnapshot ??= ResolveLocalizedCombatSnapshot();
                 if (scope == DashboardDataScope.CurrentRun)
-                    _cachedRunSnapshot ??= SnapshotAggregator.Combine(_cachedRun);
-                return (scope == DashboardDataScope.CurrentRun ? _cachedRunSnapshot : _cachedCombatSnapshot,
-                    _cachedRun);
+                    _localizedRunSnapshot ??= SnapshotAggregator.Combine(_localizedRun);
+                return (scope == DashboardDataScope.CurrentRun ? _localizedRunSnapshot : _localizedCombatSnapshot,
+                    _localizedRun);
             }
+        }
+
+        private CombatSnapshot? ResolveLocalizedCombatSnapshot()
+        {
+            if (_cachedCombatSnapshot == null)
+                return null;
+            if (_cachedRun == null || _localizedRun == null)
+                return LocalizedSnapshotResolver.Resolve(_cachedCombatSnapshot, false);
+
+            for (var index = _cachedRun.Combats.Count - 1; index >= 0; index--)
+                if (ReferenceEquals(_cachedRun.Combats[index], _cachedCombatSnapshot) ||
+                    string.Equals(_cachedRun.Combats[index].CombatId, _cachedCombatSnapshot.CombatId,
+                        StringComparison.Ordinal))
+                    return _localizedRun.Combats[index];
+            return LocalizedSnapshotResolver.Resolve(_cachedCombatSnapshot, _cachedRun is { IsMultiplayer: false });
         }
 
         internal void RestoreDefaultLayout()
@@ -435,18 +450,62 @@ namespace STS2RitsuMetrics.Ui
         {
             if (!IsInsideTree())
                 return;
-            Callable.From(RefreshLocalizedOptions).CallDeferred();
+            lock (_dashboardDataGate)
+            {
+                _localizedRun = null;
+                _localizedCombatSnapshot = null;
+                _localizedRunSnapshot = null;
+            }
+
+            if (_localizationRefreshPending)
+                return;
+            _localizationRefreshPending = true;
+            Callable.From(RebuildLocalizedUi).CallDeferred();
         }
 
-        private void RefreshLocalizedOptions()
+        private void RebuildLocalizedUi()
         {
+            _localizationRefreshPending = false;
             if (!IsInsideTree())
                 return;
-            foreach (var window in _windows.Values)
-                window.RebuildMenus();
-            _manager?.RebuildOptions();
-            _analysisCenter?.RebuildOptions();
+
+            _manager?.HideForSystemMenu();
+
+            foreach (var window in _windows.Values.ToArray())
+            {
+                window.DisposeRenderer();
+                DetachAndFree(window);
+            }
+
+            _windows.Clear();
+            if (_manager is { } currentManager && IsInstanceValid(currentManager))
+                DetachAndFree(currentManager);
+            if (_analysisCenter is { } analysisCenter && IsInstanceValid(analysisCenter))
+                DetachAndFree(analysisCenter);
+            _manager = null;
+            _analysisCenter = null;
+
+            LoadWindows();
+            CreateControlSurfaces();
+            ApplyTypographyTheme();
+            ApplySettings(true);
             MarkAllDirty();
+        }
+
+        private void CreateControlSurfaces()
+        {
+            _manager = new() { Visible = false, Theme = _typographyTheme };
+            _manager.Initialize(this, _registry);
+            AddChild(_manager);
+            _analysisCenter = new() { Theme = _typographyTheme };
+            _analysisCenter.Initialize(_registry);
+            AddChild(_analysisCenter);
+        }
+
+        private static void DetachAndFree(Node node)
+        {
+            node.GetParent()?.RemoveChild(node);
+            node.QueueFree();
         }
 
         private void ApplyTypographyTheme()
@@ -569,7 +628,9 @@ namespace STS2RitsuMetrics.Ui
                     return;
                 _cachedRun = data.Run;
                 _cachedCombatSnapshot = data.Combat;
-                _cachedRunSnapshot = null;
+                _localizedRun = null;
+                _localizedCombatSnapshot = null;
+                _localizedRunSnapshot = null;
                 _cachedSnapshotRevision = data.Revision;
             }
 

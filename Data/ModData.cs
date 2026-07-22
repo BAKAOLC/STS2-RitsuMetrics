@@ -235,6 +235,7 @@ namespace STS2RitsuMetrics.Data
         {
             if (root.TryGetProperty(name, out value))
                 return true;
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var property in root.EnumerateObject())
                 if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
                 {

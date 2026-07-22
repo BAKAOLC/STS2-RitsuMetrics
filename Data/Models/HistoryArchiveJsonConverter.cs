@@ -222,13 +222,12 @@ namespace STS2RitsuMetrics.Data.Models
                 DataVersion = index.DataVersion,
                 Runs = CreateIndexStubs(index),
             };
-            if (index.Runs.Sum(run => run.Combats.Count) > 0)
-            {
-                var profileId = ProfileManager.Instance.CurrentProfileId;
-                var dataDirectory = GetDataDirectory(profileId < 0 ? 1 : profileId);
-                archive.AttachPendingLoad(Task.Run(() => LoadCombatFiles(index, options, dataDirectory)));
-            }
+            if (index.Runs.Sum(run => run.Combats.Count) == 0)
+                return archive;
 
+            var profileId = ProfileManager.Instance.CurrentProfileId;
+            var dataDirectory = GetDataDirectory(profileId < 0 ? 1 : profileId);
+            archive.AttachPendingLoad(Task.Run(() => LoadCombatFiles(index, options, dataDirectory)));
             return archive;
         }
 
@@ -655,6 +654,7 @@ namespace STS2RitsuMetrics.Data.Models
         {
             if (root.TryGetProperty(propertyName, out value))
                 return true;
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var property in root.EnumerateObject())
                 if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
                 {
@@ -721,7 +721,9 @@ namespace STS2RitsuMetrics.Data.Models
 
         private sealed class SegmentedRun : StoredRunBase
         {
-            public List<SegmentedCombat> Combats { get; } = [];
+            // ReSharper disable once AutoPropertyCanBeMadeGetOnly.Local
+            // ReSharper disable once CollectionNeverUpdated.Local
+            public List<SegmentedCombat> Combats { get; init; } = [];
         }
 
         private sealed record SegmentedCombat(

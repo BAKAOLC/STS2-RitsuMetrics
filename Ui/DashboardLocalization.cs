@@ -182,9 +182,9 @@ namespace STS2RitsuMetrics.Ui
             string power,
             SourceDescriptor? causalSource)
         {
-            var cause = Detail(timelineEvent, "cause_source_name");
+            var cause = causalSource?.DisplayName;
             if (string.IsNullOrWhiteSpace(cause))
-                cause = causalSource?.DisplayName ?? string.Empty;
+                cause = Detail(timelineEvent, "cause_source_name");
             return string.IsNullOrWhiteSpace(cause) || string.Equals(cause, power, StringComparison.CurrentCulture)
                 ? Text("timeline.action.powerChange", "{0} changed {1}'s {2} by {3} (now {4})",
                     actor, target, power, Signed(timelineEvent.Value), Detail(timelineEvent, "result_amount"))

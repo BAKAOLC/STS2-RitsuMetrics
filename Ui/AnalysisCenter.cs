@@ -88,6 +88,7 @@ namespace STS2RitsuMetrics.Ui
                 _historyLoadRevision = historyLoadRevision;
                 ReloadRuns();
             }
+
             ProcessPendingSearch(delta);
             _refreshDelay -= delta;
             if (!_dirty || _refreshDelay > 0d)
@@ -225,8 +226,10 @@ namespace STS2RitsuMetrics.Ui
         private void ReloadRuns()
         {
             _historyLoadRevision = ModData.HistoryLoadRevision;
-            var live = Main.Repository.GetLiveRunSummary();
-            var runs = MetricsRepository.GetSavedRuns(false, false).ToList();
+            var live = Main.Repository.GetLiveRunSummary() is { } liveRun
+                ? LocalizedSnapshotResolver.Resolve(liveRun)
+                : null;
+            var runs = MetricsRepository.GetSavedRuns(false, false).Select(LocalizedSnapshotResolver.Resolve).ToList();
             if (live != null)
             {
                 var index = runs.FindIndex(run => run.RunId == live.RunId);
@@ -251,7 +254,9 @@ namespace STS2RitsuMetrics.Ui
 
         private void MergeLiveRun()
         {
-            var live = Main.Repository.GetLiveRunSummary();
+            var live = Main.Repository.GetLiveRunSummary() is { } liveRun
+                ? LocalizedSnapshotResolver.Resolve(liveRun)
+                : null;
             if (live == null)
             {
                 if (_activeRunId == null)
@@ -264,7 +269,9 @@ namespace STS2RitsuMetrics.Ui
 
             _activeRunId = live.RunId;
             if (_selectedRunId == live.RunId)
-                _selectedRunData = Main.Repository.GetLiveRun(true) ?? live;
+                _selectedRunData = Main.Repository.GetLiveRun(true) is { } fullLiveRun
+                    ? LocalizedSnapshotResolver.Resolve(fullLiveRun)
+                    : live;
             var runs = _runs;
             var index = Array.FindIndex(runs, run => run.RunId == live.RunId);
             if (index < 0)
@@ -617,10 +624,11 @@ namespace STS2RitsuMetrics.Ui
                 return null;
             if (_selectedRunData?.RunId == _selectedRunId)
                 return _selectedRunData;
-            _selectedRunData = _selectedRunId == _activeRunId
+            var run = _selectedRunId == _activeRunId
                 ? Main.Repository.GetLiveRun(true)
                 : MetricsRepository.GetSavedRun(_selectedRunId);
-            return _selectedRunData ?? _runs.FirstOrDefault(run => run.RunId == _selectedRunId);
+            _selectedRunData = run is null ? null : LocalizedSnapshotResolver.Resolve(run);
+            return _selectedRunData ?? _runs.FirstOrDefault(candidate => candidate.RunId == _selectedRunId);
         }
 
         private CombatSnapshot? SelectedSnapshot()

@@ -68,6 +68,7 @@ namespace STS2RitsuMetrics.Core
                         ? MetricIds.EffectiveHpDamageDealt
                         : MetricIds.DamageDealt);
 
+                // ReSharper disable once SeparateLocalFunctionsWithJumpStatement
                 void AddFallbackTotal(string metricId, string fallbackId)
                 {
                     if (player.Totals.ContainsKey(metricId) || !player.Totals.TryGetValue(fallbackId, out var value))
