@@ -77,9 +77,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _ExitTree()
         {
-            if (!IsInstanceValid(_popupOverlay) || _popupOverlay.GetParent() == null)
+            if (!IsInstanceValid(_popupOverlay))
                 return;
-            _popupOverlay.GetParent().RemoveChild(_popupOverlay);
             _popupOverlay.QueueFree();
         }
 
