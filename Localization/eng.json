@@ -408,6 +408,7 @@
   "timeline.kind.Attack": "Attack",
   "timeline.kind.Damage": "Damage",
   "timeline.kind.DamageModifier": "Damage modifier",
+  "timeline.kind.DamageSettlement": "Damage settlement",
   "timeline.kind.Block": "Block",
   "timeline.kind.Healing": "Healing",
   "timeline.kind.HpLoss": "HP loss",

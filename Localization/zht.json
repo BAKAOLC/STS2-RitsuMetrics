@@ -408,6 +408,7 @@
   "timeline.kind.Attack": "攻擊",
   "timeline.kind.Damage": "傷害",
   "timeline.kind.DamageModifier": "傷害修正",
+  "timeline.kind.DamageSettlement": "傷害結算",
   "timeline.kind.Block": "格擋",
   "timeline.kind.Healing": "治療",
   "timeline.kind.HpLoss": "失去生命",
