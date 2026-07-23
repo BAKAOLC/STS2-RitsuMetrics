@@ -112,7 +112,11 @@ namespace STS2RitsuMetrics.Capture
         private static readonly AsyncLocal<DamageCalculationCapture?> CurrentCalculationValue = new();
         private static readonly ConcurrentDictionary<MethodBase, ArgumentLayout> ArgumentLayouts = new();
         private static readonly ConditionalWeakTable<DamageResult, object> RecordedResults = new();
+        private static readonly object RecordedResultsLock = new();
         private static readonly object RecordedResultMarker = new();
+
+        private static readonly IEqualityComparer<DamageResult> DamageResultComparer =
+            ReferenceEqualityComparer.Instance;
 
         internal static bool HasActiveRequest => CurrentRequestValue.Value != null;
 
@@ -386,7 +390,17 @@ namespace STS2RitsuMetrics.Capture
             DamageRequestCapture request,
             IEnumerable<DamageResult> results)
         {
-            var unrecorded = results.Where(result => !RecordedResults.Remove(result)).ToArray();
+            DamageResult[] unrecorded;
+            lock (RecordedResultsLock)
+            {
+                unrecorded = results
+                    .Where(result => !RecordedResults.TryGetValue(result, out _))
+                    .Distinct(DamageResultComparer)
+                    .ToArray();
+                foreach (var result in unrecorded)
+                    RecordedResults.Add(result, RecordedResultMarker);
+            }
+
             if (unrecorded.Length == 0)
                 return;
             try
@@ -401,7 +415,10 @@ namespace STS2RitsuMetrics.Capture
 
         private static void MarkRecorded(DamageResult result)
         {
-            RecordedResults.GetValue(result, static _ => RecordedResultMarker);
+            lock (RecordedResultsLock)
+            {
+                RecordedResults.GetValue(result, static _ => RecordedResultMarker);
+            }
         }
 
         private static ArgumentLayout Layout(MethodBase method)
