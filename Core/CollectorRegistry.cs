@@ -27,6 +27,7 @@ namespace STS2RitsuMetrics.Core
         internal event Action<MetricObservation>? ObservationPublished;
         internal event Action<CombatTimelineEvent>? TimelineEventPublished;
         internal event Action? SnapshotChanged;
+        internal event Action<MetricsChange>? DataChanged;
 
         internal void RegisterBuiltIns()
         {
@@ -118,7 +119,7 @@ namespace STS2RitsuMetrics.Core
                 _metrics[definition.Id] = definition;
             }
 
-            NotifyChanged();
+            NotifyChanged(new(MetricsChangeKind.Definitions));
             return true;
         }
 
@@ -194,7 +195,7 @@ namespace STS2RitsuMetrics.Core
 
             InvokeEach(ObservationPublished, handler => handler(observation), "ObservationPublished");
 
-            NotifyChanged();
+            NotifyChanged(new(MetricsChangeKind.Metrics | MetricsChangeKind.Events, observation.MetricId));
         }
 
         internal void CompleteCombat(CombatSnapshot combat)
@@ -230,7 +231,7 @@ namespace STS2RitsuMetrics.Core
                         exception);
                 }
 
-            NotifyChanged();
+            NotifyChanged(new(MetricsChangeKind.RunStructure));
         }
 
         internal void PublishTimeline(CombatTimelineEvent timelineEvent)
@@ -254,11 +255,17 @@ namespace STS2RitsuMetrics.Core
                 }
 
             InvokeEach(TimelineEventPublished, handler => handler(timelineEvent), "TimelineEventPublished");
-            NotifyChanged();
+            NotifyChanged(new(MetricsChangeKind.Timeline));
         }
 
         internal void NotifyChanged()
         {
+            NotifyChanged(MetricsChange.All);
+        }
+
+        private void NotifyChanged(MetricsChange change)
+        {
+            InvokeEach(DataChanged, handler => handler(change), "DataChanged");
             InvokeEach(SnapshotChanged, handler => handler(), "SnapshotChanged");
         }
 

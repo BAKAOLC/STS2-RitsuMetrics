@@ -94,11 +94,16 @@ namespace STS2RitsuMetrics.Core
             }
         }
 
-        internal RunSnapshot? GetLiveRunForDashboard()
+        internal RunSnapshot? GetLiveRunForDashboard(
+            bool includeEvents,
+            bool includeTimeline,
+            bool includeCompletedCombats,
+            IReadOnlySet<string>? metricIds)
         {
             lock (_gate)
             {
-                return _liveRun?.SnapshotForLiveView();
+                return _liveRun?.SnapshotForLiveView(includeEvents, includeTimeline, includeCompletedCombats,
+                    metricIds);
             }
         }
 
@@ -218,6 +223,39 @@ namespace STS2RitsuMetrics.Core
             {
                 Main.Logger.Error($"Failed to delete analytics run '{runId}': {exception}");
                 return false;
+            }
+        }
+
+        internal static RunMergeResult MergeSavedRun(string targetRunId, RunSnapshot source)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(targetRunId);
+            ArgumentNullException.ThrowIfNull(source);
+            var result = new RunMergeResult(null, RunMergeFailure.MissingRun);
+            try
+            {
+                ModData.ModifyHistory(archive =>
+                {
+                    var targetIndex = archive.Runs.FindIndex(run => run.RunId == targetRunId);
+                    if (targetIndex < 0)
+                        return;
+                    result = RunMergeService.Analyze(archive.Runs[targetIndex], source);
+                    if (!result.Success)
+                        return;
+
+                    archive.Runs[targetIndex] = result.MergedRun!;
+                    if (!string.Equals(source.RunId, targetRunId, StringComparison.Ordinal))
+                        archive.Runs.RemoveAll(run => run.RunId == source.RunId);
+                    _ = TrimToCombatLimit(archive.Runs, ModData.Settings.HistoryCombatLimit);
+                }, operation: "merge run");
+                if (result.Success)
+                    Main.Logger.Info(
+                        $"Merged {result.AddedCombats} combat(s) into analytics run '{LogId(targetRunId)}'.");
+                return result;
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error($"Failed to merge analytics run '{LogId(targetRunId)}': {exception}");
+                return new(null, RunMergeFailure.MissingRun);
             }
         }
 

@@ -27,6 +27,7 @@ namespace STS2RitsuMetrics.Ui
         private string _appliedSearchText = string.Empty;
 
         private Button _close = null!;
+        private Button _copyRun = null!;
         private DashboardDropdown _dashboard = null!;
         private string[] _dashboardIds = [];
         private Button _deleteRun = null!;
@@ -38,6 +39,7 @@ namespace STS2RitsuMetrics.Ui
         private VBoxContainer _historyRows = null!;
         private Label _historySummary = null!;
         private int _liveHistorySignature;
+        private Button _mergeRun = null!;
         private DashboardDropdown _metric = null!;
         private Control _metricField = null!;
         private string[] _metricIds = [];
@@ -599,6 +601,110 @@ namespace STS2RitsuMetrics.Ui
                 RequestDeleteRun(run);
         }
 
+        private void CopySelectedRun()
+        {
+            var run = SelectedRawRun();
+            if (run == null)
+                return;
+            try
+            {
+                DisplayServer.ClipboardSet(RunTransferService.Serialize(run));
+                _status.Text = ModLocalization.Format("analysis.copyRun.success",
+                    "Copied the complete run with {0} combats.", run.Combats.Count);
+            }
+            catch (Exception exception)
+            {
+                _dialogs.ShowMessage(
+                    ModLocalization.Get("analysis.copyRun.failedTitle", "Could not copy run"),
+                    ModLocalization.Format("analysis.copyRun.failed", "Failed to copy the run: {0}",
+                        exception.Message),
+                    ModLocalization.Get("dialog.close", "Close"));
+            }
+        }
+
+        private void RequestMergeCopiedRun()
+        {
+            var target = SelectedRawRun();
+            if (target == null || target.RunId == _activeRunId)
+                return;
+            if (!RunTransferService.TryDeserialize(DisplayServer.ClipboardGet(), out var source, out var error))
+            {
+                _dialogs.ShowMessage(
+                    ModLocalization.Get("analysis.mergeRun.invalidTitle", "Cannot read copied run"),
+                    ModLocalization.Format("analysis.mergeRun.invalid", "The clipboard run is invalid: {0}", error),
+                    ModLocalization.Get("dialog.close", "Close"));
+                return;
+            }
+
+            var analysis = RunMergeService.Analyze(target, source);
+            if (!analysis.Success)
+            {
+                ShowMergeFailure(analysis.Failure);
+                return;
+            }
+
+            var sourceRun = source!;
+            var targetRunId = target.RunId;
+            _dialogs.ShowConfirmation(
+                ModLocalization.Get("analysis.mergeRun.title", "Merge copied run?"),
+                ModLocalization.Format("analysis.mergeRun.message",
+                    "Identity verified. Add {0} combat(s) from the copied run to the selected run. " +
+                    "{1} overlapping combat(s) will be deduplicated. The copied profile is not changed.",
+                    analysis.AddedCombats, analysis.OverlappingCombats),
+                ModLocalization.Get("analysis.mergeRun.confirm", "Merge"),
+                ModLocalization.Get("dialog.cancel", "Cancel"),
+                () => MergeCopiedRun(targetRunId, sourceRun));
+        }
+
+        private void MergeCopiedRun(string targetRunId, RunSnapshot source)
+        {
+            var result = MetricsRepository.MergeSavedRun(targetRunId, source);
+            if (!result.Success)
+            {
+                ShowMergeFailure(result.Failure);
+                return;
+            }
+
+            _selectedRunId = targetRunId;
+            _selectedRunData = null;
+            ReloadRuns();
+            Main.Collectors.NotifyChanged();
+            _status.Text = ModLocalization.Format("analysis.mergeRun.success",
+                "Merged {0} combat(s). The run now contains {1} combats.",
+                result.AddedCombats, result.MergedRun!.Combats.Count);
+        }
+
+        private void ShowMergeFailure(RunMergeFailure failure)
+        {
+            var message = failure switch
+            {
+                RunMergeFailure.EmptyRun => ModLocalization.Get("analysis.mergeRun.empty",
+                    "Both runs must contain at least one combat."),
+                RunMergeFailure.ModeMismatch => ModLocalization.Get("analysis.mergeRun.modeMismatch",
+                    "The run modes do not match."),
+                RunMergeFailure.SeedMismatch => ModLocalization.Get("analysis.mergeRun.seedMismatch",
+                    "The run seeds do not match."),
+                RunMergeFailure.IdentityMismatch => ModLocalization.Get("analysis.mergeRun.identityMismatch",
+                    "The start time, ascension, players, modifiers, or other run identity data do not match."),
+                RunMergeFailure.UnverifiableLegacyIdentity => ModLocalization.Get(
+                    "analysis.mergeRun.unverifiableLegacy",
+                    "These legacy records do not contain seed metadata and their complete run IDs differ, " +
+                    "so they cannot be safely merged."),
+                RunMergeFailure.PlayerMismatch => ModLocalization.Get("analysis.mergeRun.playerMismatch",
+                    "The recorded player rosters do not match."),
+                RunMergeFailure.CombatConflict => ModLocalization.Get("analysis.mergeRun.combatConflict",
+                    "The runs contain conflicting battles on the same floor."),
+                RunMergeFailure.NothingToMerge => ModLocalization.Get("analysis.mergeRun.nothing",
+                    "The copied run contains no additional battles."),
+                _ => ModLocalization.Get("analysis.mergeRun.missing",
+                    "The selected or copied run is no longer available."),
+            };
+            _dialogs.ShowMessage(
+                ModLocalization.Get("analysis.mergeRun.failedTitle", "Runs cannot be merged"),
+                message,
+                ModLocalization.Get("dialog.close", "Close"));
+        }
+
         private void DeleteRun(string runId)
         {
             if (!MetricsRepository.DeleteRun(runId))
@@ -616,6 +722,15 @@ namespace STS2RitsuMetrics.Ui
             _selectedRunData = null;
             ReloadRuns();
             Main.Collectors.NotifyChanged();
+        }
+
+        private RunSnapshot? SelectedRawRun()
+        {
+            if (_selectedRunId == null)
+                return null;
+            return _selectedRunId == _activeRunId
+                ? Main.Repository.GetLiveRun(true)
+                : MetricsRepository.GetSavedRun(_selectedRunId);
         }
 
         private RunSnapshot? SelectedRun()
@@ -706,18 +821,28 @@ namespace STS2RitsuMetrics.Ui
         {
             if (run == null)
             {
+                _copyRun.Visible = false;
                 _deleteRun.Visible = false;
+                _mergeRun.Visible = false;
                 _selectionTitle.Text = ModLocalization.Get("analysis.noData", "No analytics data yet");
                 _selectionMeta.Text = ModLocalization.Get("analysis.noDataHint",
                     "Complete a combat or select a saved run when history becomes available.");
                 return;
             }
 
+            _copyRun.Visible = true;
             _deleteRun.Visible = true;
-            _deleteRun.Disabled = Main.Repository.GetLiveRun(false)?.RunId == run.RunId;
+            _mergeRun.Visible = true;
+            var isActive = Main.Repository.GetLiveRun(false)?.RunId == run.RunId;
+            _deleteRun.Disabled = isActive;
+            _mergeRun.Disabled = isActive;
             _deleteRun.TooltipText = _deleteRun.Disabled
                 ? ModLocalization.Get("analysis.deleteRun.active", "The current run cannot be deleted while active.")
                 : ModLocalization.Get("analysis.deleteRun", "Delete run");
+            _mergeRun.TooltipText = _mergeRun.Disabled
+                ? ModLocalization.Get("analysis.mergeRun.active",
+                    "The current run cannot be replaced while it is active.")
+                : ModLocalization.Get("analysis.mergeRun", "Merge copied run");
             if (snapshot == null)
             {
                 _selectionTitle.Text = ModLocalization.Get("analysis.noData", "No analytics data yet");

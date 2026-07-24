@@ -256,7 +256,7 @@ namespace STS2RitsuMetrics.Core
                 identity = AllocateNewMultiplayerIdentity(identity, occurredAtUtc);
             var session = saved == null
                 ? CreateRunSession(identity, isMultiplayer, isDaily)
-                : MutableRunSession.Restore(saved);
+                : MutableRunSession.Restore(saved, identity.Metadata);
             if (saved != null)
                 RestoreRunSequenceCounters(saved);
             session.Resume();
@@ -1793,6 +1793,7 @@ namespace STS2RitsuMetrics.Core
                 StartedAtUtc = identity.StartedAtUtc,
                 IsMultiplayer = isMultiplayer,
                 IsDaily = isDaily,
+                Identity = identity.Metadata,
             };
         }
 
@@ -1818,6 +1819,18 @@ namespace STS2RitsuMetrics.Core
             }
 
             var seed = Safe(() => runState.Rng.StringSeed, string.Empty);
+            var dailyTime = Safe(() => RunManager.Instance.DailyTime?.ToUnixTimeSeconds(), null);
+            var players = runState.Players
+                .OrderBy(player => player.NetId)
+                .ThenBy(player => Safe(() => player.Character.Id.Entry, string.Empty), StringComparer.Ordinal)
+                .Select(player => new RunPlayerIdentity(
+                    player.NetId,
+                    Safe(() => player.Character.Id.Entry, string.Empty)))
+                .ToArray();
+            var modifierIds = runState.Modifiers
+                .Select(modifier => Safe(() => modifier.Id.Entry, string.Empty))
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray();
             var canonical = new StringBuilder(256);
             AppendIdentityPart(canonical, isMultiplayer
                 ? "ritsumetrics-multiplayer-run-v2"
@@ -1829,20 +1842,14 @@ namespace STS2RitsuMetrics.Core
             AppendIdentityPart(canonical, runState.AscensionLevel.ToString(CultureInfo.InvariantCulture));
             AppendIdentityPart(canonical, isMultiplayer ? "1" : "0");
             AppendIdentityPart(canonical, isDaily ? "1" : "0");
-            AppendIdentityPart(canonical, Safe(
-                () => RunManager.Instance.DailyTime?.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
-                null) ?? string.Empty);
-            foreach (var player in runState.Players
-                         .OrderBy(player => player.NetId)
-                         .ThenBy(player => Safe(() => player.Character.Id.Entry, string.Empty), StringComparer.Ordinal))
+            AppendIdentityPart(canonical, dailyTime?.ToString(CultureInfo.InvariantCulture) ?? string.Empty);
+            foreach (var player in players)
             {
-                AppendIdentityPart(canonical, player.NetId.ToString(CultureInfo.InvariantCulture));
-                AppendIdentityPart(canonical, Safe(() => player.Character.Id.Entry, string.Empty));
+                AppendIdentityPart(canonical, player.PlayerNetId.ToString(CultureInfo.InvariantCulture));
+                AppendIdentityPart(canonical, player.CharacterId);
             }
 
-            foreach (var modifierId in runState.Modifiers
-                         .Select(modifier => Safe(() => modifier.Id.Entry, string.Empty))
-                         .OrderBy(id => id, StringComparer.Ordinal))
+            foreach (var modifierId in modifierIds)
                 AppendIdentityPart(canonical, modifierId);
 
             var bytes = Encoding.UTF8.GetBytes(canonical.ToString());
@@ -1855,9 +1862,19 @@ namespace STS2RitsuMetrics.Core
                 $"Resolved analytics run identity '{LogId(runId)}': identity_version=" +
                 $"{(isMultiplayer ? "multiplayer-v2" : "v1")}, start_time_source={startTimeSource}, " +
                 $"start_time_in_hash={!isMultiplayer}, " +
-                $"players={runState.Players.Count}, modifiers={runState.Modifiers.Count}, " +
+                $"players={players.Length}, modifiers={modifierIds.Length}, " +
                 $"seed_present={!string.IsNullOrEmpty(seed)}.");
-            return new(runId, startedAtUtc);
+            return new(
+                runId,
+                startedAtUtc,
+                new(
+                    startTime > 0L ? startTime : null,
+                    seed,
+                    (int)runState.GameMode,
+                    runState.AscensionLevel,
+                    dailyTime,
+                    players,
+                    modifierIds));
         }
 
         private static RunIdentity AllocateNewMultiplayerIdentity(
@@ -1974,7 +1991,10 @@ namespace STS2RitsuMetrics.Core
 
         private sealed record ExplicitScope(string EventId, CausalScopeRuntime.ScopeState State);
 
-        private sealed record RunIdentity(string RunId, DateTimeOffset StartedAtUtc);
+        private sealed record RunIdentity(
+            string RunId,
+            DateTimeOffset StartedAtUtc,
+            RunIdentitySnapshot Metadata);
 
         private sealed record PowerCredit(
             EntityDescriptor Player,

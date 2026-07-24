@@ -119,6 +119,31 @@ namespace STS2RitsuMetrics.Api
         bool ShowPercentages,
         Action<string, string?> SetParameter);
 
+    [Flags]
+    public enum DashboardDataComponents
+    {
+        None = 0,
+        Metrics = 1 << 0,
+        Events = 1 << 1,
+        Timeline = 1 << 2,
+        RunCombats = 1 << 3,
+        All = Metrics | Events | Timeline | RunCombats,
+    }
+
+    public sealed record DashboardDataRequirements(
+        DashboardDataComponents Components,
+        IReadOnlyCollection<string>? MetricIds = null)
+    {
+        public static DashboardDataRequirements All { get; } = new(DashboardDataComponents.All);
+    }
+
+    public interface IDashboardDataConsumer
+    {
+        DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters);
+    }
+
     public interface IDashboardRenderer : IDisposable
     {
         Control View { get; }

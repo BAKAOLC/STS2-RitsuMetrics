@@ -105,6 +105,7 @@ namespace STS2RitsuMetrics.Data.Models
                     IsDaily = run.IsDaily,
                     IsVictory = run.IsVictory,
                     IsAbandoned = run.IsAbandoned,
+                    Identity = run.Identity,
                     Combats = storedCombats,
                 });
             }
@@ -428,7 +429,10 @@ namespace STS2RitsuMetrics.Data.Models
                 storedRun.IsDaily,
                 storedRun.IsVictory,
                 storedRun.IsAbandoned,
-                combats);
+                combats)
+            {
+                Identity = storedRun.Identity,
+            };
         }
 
         private static StoredCombat GetOrCreateStoredCombat(string runId, CombatSnapshot combat,
@@ -683,6 +687,7 @@ namespace STS2RitsuMetrics.Data.Models
             public bool IsDaily { get; init; }
             public bool? IsVictory { get; init; }
             public bool? IsAbandoned { get; init; }
+            public RunIdentitySnapshot? Identity { get; init; }
         }
 
         private sealed class FileArchiveIndex

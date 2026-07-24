@@ -258,6 +258,26 @@ namespace STS2RitsuMetrics.Ui
             _selectionMeta.AddThemeColorOverride("font_color", new("93A4BAFF"));
             selectionIdentity.AddChild(_selectionMeta);
             selectionHeader.AddChild(selectionIdentity);
+            _copyRun = new()
+            {
+                Text = ModLocalization.Get("analysis.copyRun", "Copy run"),
+                CustomMinimumSize = new(96f, 44f),
+                FocusMode = FocusModeEnum.None,
+                Visible = false,
+            };
+            DashboardControlTheme.ApplyButton(_copyRun);
+            _copyRun.Pressed += CopySelectedRun;
+            selectionHeader.AddChild(_copyRun);
+            _mergeRun = new()
+            {
+                Text = ModLocalization.Get("analysis.mergeRun", "Merge copied"),
+                CustomMinimumSize = new(116f, 44f),
+                FocusMode = FocusModeEnum.None,
+                Visible = false,
+            };
+            DashboardControlTheme.ApplyButton(_mergeRun, DashboardButtonKind.Primary);
+            _mergeRun.Pressed += RequestMergeCopiedRun;
+            selectionHeader.AddChild(_mergeRun);
             _deleteRun = new()
             {
                 Text = ModLocalization.Get("analysis.deleteRun", "Delete run"),

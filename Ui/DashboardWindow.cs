@@ -28,8 +28,8 @@ namespace STS2RitsuMetrics.Ui
         private DashboardSelection[] _dashboardSelections = [];
         private DashboardDefinition _definition = null!;
         private bool _dirty = true;
-        private bool _dragging;
         private Vector2 _dragOffset;
+        private bool _dragging;
         private Label _error = null!;
         private HBoxContainer _header = null!;
         private float _headerHeight = DefaultHeaderHeight;
@@ -56,6 +56,12 @@ namespace STS2RitsuMetrics.Ui
 
         internal string InstanceId => _state.InstanceId;
         internal string DashboardId => _state.DashboardId;
+        internal DashboardDataScope DataScope => _state.Scope;
+
+        internal DashboardDataRequirements DataRequirements =>
+            _renderer is IDashboardDataConsumer consumer
+                ? consumer.GetDataRequirements(_state.Scope, _state.Parameters)
+                : DashboardDataRequirements.All;
 
         internal DashboardWindowInfo Info => new(_state.InstanceId, _state.DashboardId, _state.Scope,
             _state.StyleId, _state.IsCollapsed, _state.IsLocked)
@@ -137,7 +143,7 @@ namespace STS2RitsuMetrics.Ui
             var style = ResolveStyle();
             try
             {
-                var data = _host.ResolveDashboardData(_state.Scope);
+                var data = _host.ResolveDashboardData(_state.Scope, DataRequirements);
                 _renderer.Refresh(new(
                     data.Snapshot,
                     data.Run,
@@ -194,6 +200,12 @@ namespace STS2RitsuMetrics.Ui
         internal void MarkDirty()
         {
             _dirty = true;
+        }
+
+        internal void MarkDirty(MetricsChange change)
+        {
+            if (change.Affects(DataRequirements))
+                _dirty = true;
         }
 
         internal void DisposeRenderer()

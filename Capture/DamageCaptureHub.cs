@@ -112,7 +112,7 @@ namespace STS2RitsuMetrics.Capture
         private static readonly AsyncLocal<DamageCalculationCapture?> CurrentCalculationValue = new();
         private static readonly ConcurrentDictionary<MethodBase, ArgumentLayout> ArgumentLayouts = new();
         private static readonly ConditionalWeakTable<DamageResult, object> RecordedResults = new();
-        private static readonly object RecordedResultsLock = new();
+        private static readonly Lock RecordedResultsLock = new();
         private static readonly object RecordedResultMarker = new();
 
         private static readonly IEqualityComparer<DamageResult> DamageResultComparer =

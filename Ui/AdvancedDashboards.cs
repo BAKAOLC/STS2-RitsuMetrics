@@ -21,6 +21,25 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class AdvancedDashboardRenderer(AdvancedDashboardMode mode) : DashboardRendererBase
     {
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            var components = mode switch
+            {
+                AdvancedDashboardMode.ContributionAnalysis => DashboardDataComponents.Metrics |
+                                                              DashboardDataComponents.Events,
+                AdvancedDashboardMode.TurnAnalysis => DashboardDataComponents.Timeline,
+                AdvancedDashboardMode.RunTrends => DashboardDataComponents.Metrics |
+                                                   DashboardDataComponents.RunCombats,
+                AdvancedDashboardMode.CombatRecords => DashboardDataComponents.Metrics |
+                                                       DashboardDataComponents.Timeline |
+                                                       DashboardDataComponents.RunCombats,
+                _ => DashboardDataComponents.Metrics,
+            };
+            return new(components);
+        }
+
         protected override void Render(DashboardRenderContext context)
         {
             Title = ModLocalization.Get(TitleKey(mode), TitleFallback(mode));

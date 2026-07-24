@@ -23,7 +23,11 @@ namespace STS2RitsuMetrics.Ui
         private readonly Dictionary<string, DashboardWindow> _windows = new(StringComparer.Ordinal);
         private AnalysisCenter? _analysisCenter;
         private CombatSnapshot? _cachedCombatSnapshot;
+        private DashboardDataComponents _cachedComponents;
+        private string _cachedMetricSelectionKey = string.Empty;
+        private bool _cachedNeedsRunAggregate;
         private RunSnapshot? _cachedRun;
+        private CombatSnapshot? _cachedRunAggregate;
         private long _cachedSnapshotRevision = -1;
         private bool _capstoneInUse;
         private double _dashboardDataRefreshDelay;
@@ -33,6 +37,7 @@ namespace STS2RitsuMetrics.Ui
         private RunSnapshot? _localizedRun;
         private CombatSnapshot? _localizedRunSnapshot;
         private DashboardManagerPanel? _manager;
+        private MetricsChange _pendingChange = MetricsChange.All;
         private DashboardRegistry _registry = null!;
         private int _settingsHash;
         private long _snapshotRevision;
@@ -74,7 +79,7 @@ namespace STS2RitsuMetrics.Ui
             _registry.Changed += OnRegistryChanged;
             _registry.OpenRequested += DrainOpenRequests;
             _registry.CloseRequested += CloseWindow;
-            Main.Collectors.SnapshotChanged += MarkAllDirty;
+            Main.Collectors.DataChanged += MarkDirty;
             RitsuShellThemeRuntime.ThemeChanged += OnShellThemeChanged;
             ModLocalization.Changed += OnLocalizationChanged;
             LoadWindows();
@@ -95,7 +100,7 @@ namespace STS2RitsuMetrics.Ui
             _registry.Changed -= OnRegistryChanged;
             _registry.OpenRequested -= DrainOpenRequests;
             _registry.CloseRequested -= CloseWindow;
-            Main.Collectors.SnapshotChanged -= MarkAllDirty;
+            Main.Collectors.DataChanged -= MarkDirty;
             RitsuShellThemeRuntime.ThemeChanged -= OnShellThemeChanged;
             ModLocalization.Changed -= OnLocalizationChanged;
             foreach (var window in _windows.Values)
@@ -352,33 +357,37 @@ namespace STS2RitsuMetrics.Ui
             });
         }
 
-        internal (CombatSnapshot? Snapshot, RunSnapshot? Run) ResolveDashboardData(DashboardDataScope scope)
+        internal (CombatSnapshot? Snapshot, RunSnapshot? Run) ResolveDashboardData(
+            DashboardDataScope scope,
+            DashboardDataRequirements requirements)
         {
             EnsureDashboardDataCache();
             lock (_dashboardDataGate)
             {
-                _localizedRun ??= _cachedRun is null ? null : LocalizedSnapshotResolver.Resolve(_cachedRun);
-                _localizedCombatSnapshot ??= ResolveLocalizedCombatSnapshot();
+                if (requirements.Components.HasFlag(DashboardDataComponents.RunCombats))
+                    _localizedRun ??= _cachedRun is null ? null : LocalizedSnapshotResolver.Resolve(_cachedRun);
                 if (scope == DashboardDataScope.CurrentRun)
-                    _localizedRunSnapshot ??= SnapshotAggregator.Combine(_localizedRun);
+                    _localizedRunSnapshot ??= ResolveLocalizedRunSnapshot();
+                else
+                    _localizedCombatSnapshot ??= ResolveLocalizedCombatSnapshot();
                 return (scope == DashboardDataScope.CurrentRun ? _localizedRunSnapshot : _localizedCombatSnapshot,
-                    _localizedRun);
+                    requirements.Components.HasFlag(DashboardDataComponents.RunCombats) ? _localizedRun : null);
             }
         }
 
         private CombatSnapshot? ResolveLocalizedCombatSnapshot()
         {
-            if (_cachedCombatSnapshot == null)
-                return null;
-            if (_cachedRun == null || _localizedRun == null)
-                return LocalizedSnapshotResolver.Resolve(_cachedCombatSnapshot, false);
+            return _cachedCombatSnapshot == null
+                ? null
+                : LocalizedSnapshotResolver.Resolve(_cachedCombatSnapshot,
+                    _cachedRun is { IsMultiplayer: false });
+        }
 
-            for (var index = _cachedRun.Combats.Count - 1; index >= 0; index--)
-                if (ReferenceEquals(_cachedRun.Combats[index], _cachedCombatSnapshot) ||
-                    string.Equals(_cachedRun.Combats[index].CombatId, _cachedCombatSnapshot.CombatId,
-                        StringComparison.Ordinal))
-                    return _localizedRun.Combats[index];
-            return LocalizedSnapshotResolver.Resolve(_cachedCombatSnapshot, _cachedRun is { IsMultiplayer: false });
+        private CombatSnapshot? ResolveLocalizedRunSnapshot()
+        {
+            return _cachedRunAggregate == null
+                ? null
+                : LocalizedSnapshotResolver.Resolve(_cachedRunAggregate, _cachedRun is { IsMultiplayer: false });
         }
 
         internal void RestoreDefaultLayout()
@@ -561,9 +570,15 @@ namespace STS2RitsuMetrics.Ui
 
         private void MarkAllDirty()
         {
+            MarkDirty(MetricsChange.All);
+        }
+
+        private void MarkDirty(MetricsChange change)
+        {
             lock (_dashboardDataGate)
             {
                 _snapshotRevision++;
+                _pendingChange = _pendingChange.Merge(change);
             }
 
             _visibilityDirty = true;
@@ -575,35 +590,71 @@ namespace STS2RitsuMetrics.Ui
             if (_dashboardDataRefreshDelay > 0d || !HasVisibleDataConsumer())
                 return;
             long revision;
+            DashboardDataComponents components;
+            bool needsRunAggregate;
+            IReadOnlySet<string>? metricIds;
+            string metricSelectionKey;
+            MetricsChange change;
             lock (_dashboardDataGate)
             {
-                if (_cachedSnapshotRevision == _snapshotRevision || _dashboardDataRefreshTask != null)
+                var plan = RequiredDataPlan();
+                components = plan.Components;
+                needsRunAggregate = plan.NeedsRunAggregate;
+                metricIds = plan.MetricIds;
+                metricSelectionKey = plan.MetricSelectionKey;
+                if ((_cachedSnapshotRevision == _snapshotRevision && _cachedComponents == components &&
+                     _cachedNeedsRunAggregate == needsRunAggregate &&
+                     _cachedMetricSelectionKey == metricSelectionKey) ||
+                    _dashboardDataRefreshTask != null)
                     return;
                 revision = _snapshotRevision;
+                change = _pendingChange;
+                _pendingChange = default;
             }
 
-            BeginDashboardDataRefresh(revision);
+            BeginDashboardDataRefresh(revision, components, needsRunAggregate, metricIds, metricSelectionKey, change);
         }
 
         private void EnsureDashboardDataCache()
         {
             long revision;
+            DashboardDataComponents components;
+            bool needsRunAggregate;
+            IReadOnlySet<string>? metricIds;
+            string metricSelectionKey;
+            MetricsChange change;
             lock (_dashboardDataGate)
             {
                 if (_cachedSnapshotRevision >= 0)
                     return;
                 revision = _snapshotRevision;
+                var plan = RequiredDataPlan();
+                components = plan.Components;
+                needsRunAggregate = plan.NeedsRunAggregate;
+                metricIds = plan.MetricIds;
+                metricSelectionKey = plan.MetricSelectionKey;
+                change = _pendingChange;
+                _pendingChange = default;
             }
 
             if (_dashboardDataRefreshTask == null)
-                BeginDashboardDataRefresh(revision);
+                BeginDashboardDataRefresh(revision, components, needsRunAggregate, metricIds, metricSelectionKey,
+                    change);
         }
 
-        private void BeginDashboardDataRefresh(long revision)
+        private void BeginDashboardDataRefresh(
+            long revision,
+            DashboardDataComponents components,
+            bool needsRunAggregate,
+            IReadOnlySet<string>? metricIds,
+            string metricSelectionKey,
+            MetricsChange change)
         {
             var repository = Main.Repository;
             _dashboardDataRefreshDelay = DashboardDataRefreshInterval;
-            _dashboardDataRefreshTask = Task.Run(() => CaptureDashboardData(repository, revision));
+            _dashboardDataRefreshTask = Task.Run(() =>
+                CaptureDashboardData(repository, revision, components, needsRunAggregate, metricIds,
+                    metricSelectionKey, change));
         }
 
         private void ApplyCompletedDashboardDataRefresh()
@@ -618,16 +669,29 @@ namespace STS2RitsuMetrics.Ui
             }
             catch (Exception exception)
             {
+                lock (_dashboardDataGate)
+                {
+                    _pendingChange = _pendingChange.Merge(MetricsChange.All);
+                }
+
                 Main.Logger.Error($"Asynchronous dashboard snapshot refresh failed: {exception}");
                 return;
             }
 
+            bool shapeChanged;
             lock (_dashboardDataGate)
             {
                 if (data.Revision < _cachedSnapshotRevision)
                     return;
+                shapeChanged = _cachedComponents != data.Components ||
+                               _cachedNeedsRunAggregate != data.NeedsRunAggregate ||
+                               _cachedMetricSelectionKey != data.MetricSelectionKey;
                 _cachedRun = data.Run;
                 _cachedCombatSnapshot = data.Combat;
+                _cachedRunAggregate = data.RunAggregate;
+                _cachedComponents = data.Components;
+                _cachedNeedsRunAggregate = data.NeedsRunAggregate;
+                _cachedMetricSelectionKey = data.MetricSelectionKey;
                 _localizedRun = null;
                 _localizedCombatSnapshot = null;
                 _localizedRunSnapshot = null;
@@ -635,17 +699,46 @@ namespace STS2RitsuMetrics.Ui
             }
 
             foreach (var window in _windows.Values)
-                window.MarkDirty();
-            _analysisCenter?.MarkDirty();
+                if (shapeChanged)
+                    window.MarkDirty();
+                else
+                    window.MarkDirty(data.Change);
+            if (data.Change.Kind != MetricsChangeKind.None)
+                _analysisCenter?.MarkDirty();
         }
 
-        private static DashboardDataCache CaptureDashboardData(MetricsRepository repository, long revision)
+        private static DashboardDataCache CaptureDashboardData(
+            MetricsRepository repository,
+            long revision,
+            DashboardDataComponents components,
+            bool needsRunAggregate,
+            IReadOnlySet<string>? metricIds,
+            string metricSelectionKey,
+            MetricsChange change)
         {
-            var run = repository.GetLiveRunForDashboard();
+            var includeEvents = components.HasFlag(DashboardDataComponents.Events);
+            var includeTimeline = components.HasFlag(DashboardDataComponents.Timeline);
+            var includeCompletedCombats = needsRunAggregate ||
+                                          components.HasFlag(DashboardDataComponents.RunCombats);
+            var run = repository.GetLiveRunForDashboard(includeEvents, includeTimeline, includeCompletedCombats,
+                metricIds);
+            run = DashboardSnapshotProjector.Project(run, metricIds);
             var combat = run is { Combats.Count: > 0 }
                 ? run.Combats[^1]
-                : repository.GetLiveCombat(true);
-            return new(revision, run, combat);
+                : DashboardSnapshotProjector.Project(repository.GetLiveCombat(includeEvents), metricIds);
+            if (!includeTimeline && combat?.Timeline is { Count: > 0 })
+                combat = combat with { Timeline = [] };
+            var runAggregate = needsRunAggregate ? SnapshotAggregator.Combine(run) : null;
+            return new(revision, components, needsRunAggregate, metricSelectionKey, change, run, combat,
+                runAggregate);
+        }
+
+        private DashboardDataPlan RequiredDataPlan()
+        {
+            var consumers = _windows.Values
+                .Where(window => window.Visible)
+                .Select(window => (window.DataScope, window.DataRequirements));
+            return DashboardDataPlan.Create(consumers, _analysisCenter?.Visible == true);
         }
 
         private bool HasVisibleDataConsumer()
@@ -729,7 +822,12 @@ namespace STS2RitsuMetrics.Ui
 
         private readonly record struct DashboardDataCache(
             long Revision,
+            DashboardDataComponents Components,
+            bool NeedsRunAggregate,
+            string MetricSelectionKey,
+            MetricsChange Change,
             RunSnapshot? Run,
-            CombatSnapshot? Combat);
+            CombatSnapshot? Combat,
+            CombatSnapshot? RunAggregate);
     }
 }

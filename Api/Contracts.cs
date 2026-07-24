@@ -127,6 +127,19 @@ namespace STS2RitsuMetrics.Api
         IReadOnlyList<MetricObservation> Events,
         IReadOnlyList<CombatTimelineEvent>? Timeline = null);
 
+    public sealed record RunPlayerIdentity(
+        ulong PlayerNetId,
+        string CharacterId);
+
+    public sealed record RunIdentitySnapshot(
+        long? StartedAtUnixSeconds,
+        string Seed,
+        int GameMode,
+        int AscensionLevel,
+        long? DailyTimeUnixSeconds,
+        IReadOnlyList<RunPlayerIdentity> Players,
+        IReadOnlyList<string> ModifierIds);
+
     public sealed record RunSnapshot(
         string RunId,
         DateTimeOffset StartedAtUtc,
@@ -135,7 +148,10 @@ namespace STS2RitsuMetrics.Api
         bool IsDaily,
         bool? IsVictory,
         bool? IsAbandoned,
-        IReadOnlyList<CombatSnapshot> Combats);
+        IReadOnlyList<CombatSnapshot> Combats)
+    {
+        public RunIdentitySnapshot? Identity { get; init; }
+    }
 
     public sealed class MetricsQuery
     {

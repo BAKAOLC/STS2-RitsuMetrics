@@ -18,6 +18,7 @@ namespace STS2RitsuMetrics.Domain
         public bool IsDaily { get; init; }
         public bool? IsVictory { get; set; }
         public bool? IsAbandoned { get; set; }
+        public RunIdentitySnapshot? Identity { get; init; }
 
         public MutableCombatSession? GetActiveCombat()
         {
@@ -62,7 +63,7 @@ namespace STS2RitsuMetrics.Domain
             }
         }
 
-        public static MutableRunSession Restore(RunSnapshot snapshot)
+        public static MutableRunSession Restore(RunSnapshot snapshot, RunIdentitySnapshot? identity = null)
         {
             var session = new MutableRunSession
             {
@@ -70,6 +71,7 @@ namespace STS2RitsuMetrics.Domain
                 StartedAtUtc = snapshot.StartedAtUtc,
                 IsMultiplayer = snapshot.IsMultiplayer,
                 IsDaily = snapshot.IsDaily,
+                Identity = identity ?? snapshot.Identity,
             };
             var active = snapshot.Combats.LastOrDefault(combat => combat is
                 { Completed: false, EndedAtUtc: null });
@@ -116,9 +118,37 @@ namespace STS2RitsuMetrics.Domain
             return Snapshot(includeEvents, includeTimeline, false);
         }
 
-        internal RunSnapshot SnapshotForLiveView()
+        internal RunSnapshot SnapshotForLiveView(
+            bool includeEvents,
+            bool includeTimeline,
+            bool includeCompletedCombats,
+            IReadOnlySet<string>? metricIds)
         {
-            return Snapshot(true, true, true);
+            lock (_gate)
+            {
+                var combats = new List<CombatSnapshot>(_completedCombats.Count + (_activeCombat == null ? 0 : 1));
+                if (includeCompletedCombats)
+                    combats.AddRange(_completedCombats.Select(combat =>
+                        Project(combat, includeEvents, includeTimeline)));
+                if (_activeCombat != null)
+                    combats.Add(_activeCombat.Snapshot(includeEvents, includeTimeline, metricIds));
+                return new(RunId, StartedAtUtc, EndedAtUtc, IsMultiplayer, IsDaily, IsVictory, IsAbandoned,
+                    combats.AsReadOnly())
+                {
+                    Identity = Identity,
+                };
+            }
+
+            static CombatSnapshot Project(CombatSnapshot combat, bool events, bool timeline)
+            {
+                if (events && timeline)
+                    return combat;
+                return combat with
+                {
+                    Events = events ? combat.Events : [],
+                    Timeline = timeline ? combat.Timeline : [],
+                };
+            }
         }
 
         private RunSnapshot Snapshot(bool includeEvents, bool includeTimeline, bool reuseCompletedCombats)
@@ -134,7 +164,10 @@ namespace STS2RitsuMetrics.Domain
                 if (_activeCombat != null)
                     combats.Add(_activeCombat.Snapshot(includeEvents, includeTimeline));
                 return new(RunId, StartedAtUtc, EndedAtUtc, IsMultiplayer, IsDaily, IsVictory, IsAbandoned,
-                    combats.AsReadOnly());
+                    combats.AsReadOnly())
+                {
+                    Identity = Identity,
+                };
             }
         }
     }
@@ -239,12 +272,21 @@ namespace STS2RitsuMetrics.Domain
 
         internal CombatSnapshot Snapshot(bool includeEvents, bool includeTimeline)
         {
+            return Snapshot(includeEvents, includeTimeline, null);
+        }
+
+        internal CombatSnapshot Snapshot(
+            bool includeEvents,
+            bool includeTimeline,
+            IReadOnlySet<string>? metricIds)
+        {
             lock (_gate)
             {
-                var players = _players.Values.Select(p => p.Snapshot())
+                var players = _players.Values.Select(p => p.Snapshot(metricIds))
                     .OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase).ToList().AsReadOnly();
                 IReadOnlyList<MetricObservation> events = includeEvents
-                    ? _events.ToList().AsReadOnly()
+                    ? _events.Where(observation => metricIds == null ||
+                                                   metricIds.Contains(observation.MetricId)).ToList().AsReadOnly()
                     : Array.Empty<MetricObservation>();
                 IReadOnlyList<CombatTimelineEvent> timeline = includeTimeline
                     ? _timeline.ToList().AsReadOnly()
@@ -319,22 +361,35 @@ namespace STS2RitsuMetrics.Domain
 
         public PlayerMetricSnapshot Snapshot()
         {
+            return Snapshot(null);
+        }
+
+        internal PlayerMetricSnapshot Snapshot(IReadOnlySet<string>? metricIds)
+        {
             var sourceValues = new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(_sources.Count,
                 StringComparer.Ordinal);
             foreach (var (metricId, values) in _sources)
+            {
+                if (metricIds != null && !metricIds.Contains(metricId))
+                    continue;
                 sourceValues.Add(metricId, values.Values
                     .Select(source => source.Snapshot())
                     .OrderByDescending(source => source.Value)
                     .ThenBy(source => source.DisplayName, StringComparer.OrdinalIgnoreCase)
                     .ToArray());
+            }
+
             var sources = new ReadOnlyDictionary<string, IReadOnlyList<SourceMetricSnapshot>>(sourceValues);
+            var totals = metricIds == null
+                ? new(_totals, StringComparer.Ordinal)
+                : _totals.Where(item => metricIds.Contains(item.Key))
+                    .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
             return new(
                 player.Key,
                 player.PlayerNetId,
                 player.DisplayName,
                 player.CharacterId,
-                new ReadOnlyDictionary<string, decimal>(
-                    new Dictionary<string, decimal>(_totals, StringComparer.Ordinal)),
+                new ReadOnlyDictionary<string, decimal>(totals),
                 sources);
         }
     }

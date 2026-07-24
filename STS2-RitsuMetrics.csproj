@@ -24,6 +24,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Remove="Tests\**\*.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <Reference Include="sts2" HintPath="$(Sts2DataDir)\sts2.dll" Private="False"/>
         <Reference Include="0Harmony" HintPath="$(Sts2DataDir)\0Harmony.dll" Private="False"/>
     </ItemGroup>

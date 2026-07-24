@@ -141,12 +141,13 @@ namespace STS2RitsuMetrics.Ui
     }
 
     public abstract class DashboardRendererBase : IDashboardRenderer, IDashboardRendererPresentation,
-        IDashboardRendererFooterPresentation
+        IDashboardRendererFooterPresentation, IDashboardDataConsumer
     {
         private const float FooterSeparation = 8f;
         private const float MinimumOverflowContextWidth = 48f;
         private readonly HBoxContainer _footer;
         private readonly Label _footerContext;
+        private readonly Dictionary<string, ReconciledRowState> _reconciledRows = new(StringComparer.Ordinal);
         private string _compactFooterContext = string.Empty;
         private string _fullFooterContext = string.Empty;
         private Action? _scopeToggle;
@@ -214,11 +215,21 @@ namespace STS2RitsuMetrics.Ui
         protected Label Status { get; }
         public string? CompactSubtitle { get; protected set; }
 
+        protected virtual bool ReconcileRowsOnRefresh => false;
+
+        public virtual DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            return DashboardDataRequirements.All;
+        }
+
         public Control View { get; }
 
         public void Refresh(DashboardRenderContext context)
         {
-            Clear(Rows);
+            if (!ReconcileRowsOnRefresh)
+                Clear(Rows);
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
             View.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
             Toolbar.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
@@ -250,6 +261,55 @@ namespace STS2RitsuMetrics.Ui
         public string? Title { get; protected set; }
         public string? Subtitle { get; protected set; }
         public string? AccentColor { get; protected set; }
+
+        protected void ReconcileRows(IEnumerable<ReconciledRow> rows)
+        {
+            var requested = rows.ToArray();
+            var plan = KeyedReconciliation.Plan(
+                _reconciledRows.ToDictionary(item => item.Key, item => item.Value.Fingerprint,
+                    StringComparer.Ordinal),
+                requested.Select(row => new ReconciliationItem(row.Key, row.Fingerprint)).ToArray());
+            var requestedByKey = requested.ToDictionary(row => row.Key, StringComparer.Ordinal);
+            var next = new Dictionary<string, ReconciledRowState>(StringComparer.Ordinal);
+            foreach (var decision in plan.Decisions)
+            {
+                var row = requestedByKey[decision.Key];
+                var hasPrevious = _reconciledRows.TryGetValue(row.Key, out var previous);
+                Control control;
+                if (decision.Reuse && hasPrevious &&
+                    GodotObject.IsInstanceValid(previous.Control))
+                {
+                    control = previous.Control;
+                }
+                else
+                {
+                    if (hasPrevious && GodotObject.IsInstanceValid(previous.Control))
+                    {
+                        Rows.RemoveChild(previous.Control);
+                        previous.Control.QueueFree();
+                    }
+
+                    control = row.Create();
+                    Rows.AddChild(control);
+                }
+
+                Rows.MoveChild(control, decision.Index);
+                next.Add(row.Key, new(row.Fingerprint, control));
+            }
+
+            foreach (var key in plan.RemovedKeys)
+            {
+                var stale = _reconciledRows[key];
+                if (!GodotObject.IsInstanceValid(stale.Control))
+                    continue;
+                Rows.RemoveChild(stale.Control);
+                stale.Control.QueueFree();
+            }
+
+            _reconciledRows.Clear();
+            foreach (var (key, state) in next)
+                _reconciledRows.Add(key, state);
+        }
 
         internal void SetScopeToggle(Action toggle)
         {
@@ -375,6 +435,31 @@ namespace STS2RitsuMetrics.Ui
             {
                 return Colors.White;
             }
+        }
+
+        protected static string VisualStyleFingerprint(DashboardStyleDefinition style)
+        {
+            return string.Join(':',
+                style.Id,
+                style.FontSize,
+                style.RowHeight,
+                style.TextColor,
+                style.SecondaryTextColor,
+                style.SurfaceColor,
+                style.TrackColor,
+                style.BorderColor,
+                style.PositiveColor,
+                style.NegativeColor,
+                style.WarningColor,
+                string.Join(',', style.AccentColors));
+        }
+
+        protected static string EmptyRowFingerprint(DashboardRenderContext context, string text = "No combat data")
+        {
+            return string.Join(':',
+                VisualStyleFingerprint(context.Style),
+                ModLocalization.Get("dashboard.noData", text),
+                ModLocalization.Get("dashboard.waiting", "Live data will appear when combat begins"));
         }
 
         protected static void Clear(Node node)
@@ -912,6 +997,12 @@ namespace STS2RitsuMetrics.Ui
 
         protected void Empty(DashboardRenderContext context, string text = "No combat data")
         {
+            Rows.AddChild(CreateEmptyRow(context, text));
+            Status.Text = string.Empty;
+        }
+
+        protected static Control CreateEmptyRow(DashboardRenderContext context, string text = "No combat data")
+        {
             var empty = new VBoxContainer { CustomMinimumSize = new(0, 112) };
             empty.AddThemeConstantOverride("separation", 4);
             var glyph = DashboardIcons.View(DashboardIcon.NoData, context.Style.FontSize + 16,
@@ -928,13 +1019,23 @@ namespace STS2RitsuMetrics.Ui
                 Math.Max(9, context.Style.FontSize - 1));
             hint.HorizontalAlignment = HorizontalAlignment.Center;
             empty.AddChild(hint);
-            Rows.AddChild(Surface(empty, context.Style, context.Style.WarningColor));
-            Status.Text = string.Empty;
+            return Surface(empty, context.Style, context.Style.WarningColor);
         }
+
+        protected sealed record ReconciledRow(string Key, string Fingerprint, Func<Control> Create);
+
+        private readonly record struct ReconciledRowState(string Fingerprint, Control Control);
     }
 
     internal sealed partial class OverviewRenderer : DashboardRendererBase
     {
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            return new(DashboardDataComponents.Metrics | DashboardDataComponents.Timeline);
+        }
+
         protected override void Render(DashboardRenderContext context)
         {
             RenderOverview(context);
@@ -945,6 +1046,20 @@ namespace STS2RitsuMetrics.Ui
     {
         private DashboardRenderContext? _lastContext;
         private string? _selectedPlayerKey;
+
+        protected override bool ReconcileRowsOnRefresh => true;
+
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            var metricId = fixedMetricId ?? parameters.GetValueOrDefault(DashboardParameterIds.MetricId,
+                MetricIds.DamageContribution);
+            var components = DashboardDataComponents.Metrics;
+            if (DashboardPresentation.SplitSummons(parameters))
+                components |= DashboardDataComponents.Events;
+            return new(components, [metricId]);
+        }
 
         protected override void Render(DashboardRenderContext context)
         {
@@ -961,7 +1076,12 @@ namespace STS2RitsuMetrics.Ui
             CompactSubtitle = CompactScopeName(context.Scope);
             if (snapshot == null || snapshot.Players.Count == 0)
             {
-                Empty(context);
+                ReconcileRows(
+                [
+                    new("__empty", EmptyRowFingerprint(context),
+                        () => CreateEmptyRow(context)),
+                ]);
+                Status.Text = string.Empty;
                 return;
             }
 
@@ -994,33 +1114,38 @@ namespace STS2RitsuMetrics.Ui
         {
             var maximum = Math.Max(1m, values.Select(item => item.Value).DefaultIfEmpty().Max());
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
-            for (var index = 0; index < values.Length; index++)
+            ReconcileRows(values.Select((entry, index) =>
             {
-                var (player, value) = values[index];
+                var (player, value) = entry;
                 var accent = Accent(context.Style, index);
-                var content = PlayerMeterRow(player, index + 1, value, total, maximum, accent, context.Style,
-                    context.ShowPercentages, singleLine);
-                var row = InteractiveRow(content, context.Style, accent, singleLine);
-                DashboardTooltip.Set(row,
-                [
-                    player.DisplayName,
-                    $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
-                    $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
-                    (total > 0m ? $"{value / total:P1}" : "—"),
-                    ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
-                ]);
-                row.GuiInput += input =>
+                var fingerprint = string.Join("\u001e", MeterStyleFingerprint(context), index, player.DisplayName,
+                    player.CharacterId, value, total, maximum, accent);
+                return new ReconciledRow($"player:{player.PlayerKey}", fingerprint, () =>
                 {
-                    if (input is not InputEventMouseButton
-                        {
-                            ButtonIndex: MouseButton.Left, Pressed: true,
-                        })
-                        return;
-                    _selectedPlayerKey = player.PlayerKey;
-                    RefreshLast();
-                };
-                Rows.AddChild(row);
-            }
+                    var content = PlayerMeterRow(player, index + 1, value, total, maximum, accent, context.Style,
+                        context.ShowPercentages, singleLine);
+                    var row = InteractiveRow(content, context.Style, accent, singleLine);
+                    DashboardTooltip.Set(row,
+                    [
+                        player.DisplayName,
+                        $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
+                        $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
+                        (total > 0m ? $"{value / total:P1}" : "—"),
+                        ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
+                    ]);
+                    row.GuiInput += input =>
+                    {
+                        if (input is not InputEventMouseButton
+                            {
+                                ButtonIndex: MouseButton.Left, Pressed: true,
+                            })
+                            return;
+                        _selectedPlayerKey = player.PlayerKey;
+                        RefreshLast();
+                    };
+                    return row;
+                });
+            }));
         }
 
         private void RenderPlayerDetail(
@@ -1031,60 +1156,86 @@ namespace STS2RitsuMetrics.Ui
             decimal total)
         {
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
-            var backText = ModLocalization.Get("dashboard.backToRanking", "Team ranking");
-            var back = new Button
+            var rows = new List<ReconciledRow>
             {
-                Text = singleLine ? string.Empty : backText,
-                TooltipText = backText,
-                Alignment = singleLine ? HorizontalAlignment.Center : HorizontalAlignment.Left,
-                FocusMode = Control.FocusModeEnum.None,
-            };
-            if (singleLine)
-                DashboardControlTheme.ApplyIconButton(back, compact: true);
-            else
-                DashboardControlTheme.ApplyButton(back, DashboardButtonKind.Subtle);
-            DashboardIcons.Apply(back, DashboardIcon.Back);
-            back.Pressed += () =>
-            {
-                _selectedPlayerKey = null;
-                RefreshLast();
+                new("detail:header",
+                    string.Join("\u001e", MeterStyleFingerprint(context), player.PlayerKey, player.DisplayName, value,
+                        total, singleLine),
+                    () =>
+                    {
+                        var backText = ModLocalization.Get("dashboard.backToRanking", "Team ranking");
+                        var back = new Button
+                        {
+                            Text = singleLine ? string.Empty : backText,
+                            TooltipText = backText,
+                            Alignment = singleLine ? HorizontalAlignment.Center : HorizontalAlignment.Left,
+                            FocusMode = Control.FocusModeEnum.None,
+                        };
+                        if (singleLine)
+                            DashboardControlTheme.ApplyIconButton(back, compact: true);
+                        else
+                            DashboardControlTheme.ApplyButton(back, DashboardButtonKind.Subtle);
+                        DashboardIcons.Apply(back, DashboardIcon.Back);
+                        back.Pressed += () =>
+                        {
+                            _selectedPlayerKey = null;
+                            RefreshLast();
+                        };
+                        var playerHeader = PlayerHeader(player, 0, value, total, Accent(context.Style, 0),
+                            context.Style, singleLine);
+                        if (!singleLine)
+                        {
+                            var stack = new VBoxContainer();
+                            stack.AddChild(back);
+                            stack.AddChild(playerHeader);
+                            return stack;
+                        }
+
+                        var detailHeader =
+                            new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                        detailHeader.AddThemeConstantOverride("separation", 4);
+                        detailHeader.AddChild(back);
+                        playerHeader.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+                        detailHeader.AddChild(playerHeader);
+                        return detailHeader;
+                    }),
             };
             var accent = Accent(context.Style, 0);
-            var playerHeader = PlayerHeader(player, 0, value, total, accent, context.Style, singleLine);
-            if (singleLine)
-            {
-                var detailHeader = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-                detailHeader.AddThemeConstantOverride("separation", 4);
-                detailHeader.AddChild(back);
-                playerHeader.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-                detailHeader.AddChild(playerHeader);
-                Rows.AddChild(detailHeader);
-            }
-            else
-            {
-                Rows.AddChild(back);
-                Rows.AddChild(playerHeader);
-            }
 
             if (!player.Sources.TryGetValue(metricId, out var sources) || sources.Count == 0)
             {
-                Rows.AddChild(Label(ModLocalization.Get("overlay.noSource", "No source breakdown"),
-                    context.Style, true));
+                rows.Add(new("detail:no-source", MeterStyleFingerprint(context),
+                    () => Label(ModLocalization.Get("overlay.noSource", "No source breakdown"),
+                        context.Style, true)));
+                ReconcileRows(rows);
+                Status.Text = string.Empty;
                 return;
             }
 
             var sourceMaximum = Math.Max(1m, sources.Max(item => item.Value));
-            foreach (var source in sources)
+            rows.AddRange(sources.Select(source =>
             {
                 var percent = value > 0m ? $"{source.Value / value:P1}" : "—";
-                Rows.AddChild(Meter(source.DisplayName,
-                    $"{Format(source.Value)}  ·  {percent}  ·  ×{source.Occurrences}",
-                    source.Value, sourceMaximum, accent, context.Style,
-                    singleLine ? context.Style.RowHeight : Math.Max(24, context.Style.RowHeight - 5)));
-            }
+                return new ReconciledRow($"source:{source.SourceKey}",
+                    string.Join("\u001e", MeterStyleFingerprint(context), source.DisplayName, source.Value,
+                        source.Occurrences, value, sourceMaximum),
+                    () => Meter(source.DisplayName,
+                        $"{Format(source.Value)}  ·  {percent}  ·  ×{source.Occurrences}",
+                        source.Value, sourceMaximum, accent, context.Style,
+                        singleLine ? context.Style.RowHeight : Math.Max(24, context.Style.RowHeight - 5)));
+            }));
 
+            ReconcileRows(rows);
             Status.Text = ModLocalization.Format("dashboard.sourceCount", "{0} · {1} sources",
                 player.DisplayName, sources.Count);
+        }
+
+        private static string MeterStyleFingerprint(DashboardRenderContext context)
+        {
+            return string.Join(':',
+                VisualStyleFingerprint(context.Style),
+                context.ShowPercentages,
+                DashboardPresentation.SingleLine(context.Parameters));
         }
 
         private static PanelContainer InteractiveRow(
@@ -1409,6 +1560,14 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class ReceivedDamageRenderer : DashboardRendererBase
     {
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            return new(DashboardDataComponents.Metrics | DashboardDataComponents.Timeline,
+                [MetricIds.DamageBlocked]);
+        }
+
         protected override void Render(DashboardRenderContext context)
         {
             var snapshot = context.Snapshot;
@@ -1511,6 +1670,15 @@ namespace STS2RitsuMetrics.Ui
             _search.TextChanged += _ => RefreshFromFilter();
         }
 
+        protected override bool ReconcileRowsOnRefresh => true;
+
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            return new(DashboardDataComponents.Timeline);
+        }
+
         protected override void Render(DashboardRenderContext context)
         {
             _lastContext = context;
@@ -1518,7 +1686,12 @@ namespace STS2RitsuMetrics.Ui
             if (snapshot == null || Timeline(snapshot).Count == 0)
             {
                 RebuildFilters(null);
-                Empty(context);
+                ReconcileRows(
+                [
+                    new("__empty", EmptyRowFingerprint(context),
+                        () => CreateEmptyRow(context)),
+                ]);
+                Status.Text = string.Empty;
                 return;
             }
 
@@ -1534,8 +1707,10 @@ namespace STS2RitsuMetrics.Ui
             if (search.Length > 0)
                 events = events.Where(item => SearchText(item).Contains(search, StringComparison.OrdinalIgnoreCase));
             var selected = SelectEvents(events);
-            foreach (var timelineEvent in selected)
-                Rows.AddChild(CreateRow(timelineEvent, context.Style));
+            ReconcileRows(selected.Select(timelineEvent => new ReconciledRow(
+                timelineEvent.EventId,
+                RowFingerprint(timelineEvent, context.Style),
+                () => CreateRow(timelineEvent, context.Style))));
             Status.Text = ModLocalization.Format("dashboard.timeline.status", "{0} events · {1} rounds",
                 selected.Count, snapshot.RoundCount);
         }
@@ -1559,6 +1734,34 @@ namespace STS2RitsuMetrics.Ui
         {
             return WrappedLabel(RowText(timelineEvent), style,
                 timelineEvent.Kind == CombatTimelineKind.DamageModifier);
+        }
+
+        protected virtual string RowFingerprint(
+            CombatTimelineEvent timelineEvent,
+            DashboardStyleDefinition style)
+        {
+            var details = string.Join('\u001f', timelineEvent.Details.OrderBy(item => item.Key, StringComparer.Ordinal)
+                .Select(item => $"{item.Key}={item.Value}"));
+            return string.Join("\u001e",
+                timelineEvent.Sequence,
+                timelineEvent.ParentEventId,
+                timelineEvent.TurnIndex,
+                timelineEvent.Round,
+                timelineEvent.Kind,
+                timelineEvent.Phase,
+                timelineEvent.ActionId,
+                timelineEvent.DisplayText,
+                timelineEvent.Actor?.DisplayName,
+                timelineEvent.Target?.DisplayName,
+                timelineEvent.Source?.DisplayName,
+                timelineEvent.Value,
+                timelineEvent.Damage?.RequestedAmount,
+                timelineEvent.Damage?.ModifiedAmount,
+                timelineEvent.Damage?.BlockedAmount,
+                timelineEvent.Damage?.HpLost,
+                timelineEvent.Damage?.Contributions.Count,
+                details,
+                VisualStyleFingerprint(style));
         }
 
         private static string SearchText(CombatTimelineEvent timelineEvent)
@@ -1822,6 +2025,17 @@ namespace STS2RitsuMetrics.Ui
             return row;
         }
 
+        protected override string RowFingerprint(
+            CombatTimelineEvent timelineEvent,
+            DashboardStyleDefinition style)
+        {
+            return string.Join("\u001e",
+                base.RowFingerprint(timelineEvent, style),
+                _collapsed.Contains(timelineEvent.EventId),
+                _descendantsByEventId.GetValueOrDefault(timelineEvent.EventId),
+                string.Join('\u001f', _ancestorsByEventId.GetValueOrDefault(timelineEvent.EventId) ?? []));
+        }
+
         private (EntityDescriptor? Actor, SourceDescriptor? Source) CausalOrigin(
             CombatTimelineEvent timelineEvent)
         {
@@ -1989,13 +2203,27 @@ namespace STS2RitsuMetrics.Ui
             _search.TextChanged += _ => RefreshLastPreservingScroll();
         }
 
+        protected override bool ReconcileRowsOnRefresh => true;
+
+        public override DashboardDataRequirements GetDataRequirements(
+            DashboardDataScope scope,
+            IReadOnlyDictionary<string, string> parameters)
+        {
+            return new(DashboardDataComponents.Timeline);
+        }
+
         protected override void Render(DashboardRenderContext context)
         {
             _lastContext = context;
             var snapshot = context.Snapshot;
             if (snapshot == null)
             {
-                Empty(context);
+                ReconcileRows(
+                [
+                    new("__empty", EmptyRowFingerprint(context),
+                        () => CreateEmptyRow(context)),
+                ]);
+                Status.Text = string.Empty;
                 return;
             }
 
@@ -2006,24 +2234,52 @@ namespace STS2RitsuMetrics.Ui
                 .OrderBy(item => item.Sequence)
                 .TakeLast(500)
                 .ToArray();
-            foreach (var timelineEvent in events)
+            ReconcileRows(events.Select(timelineEvent =>
             {
                 var expanded = _expanded.Contains(timelineEvent.EventId);
-                var group = new VBoxContainer();
-                group.AddThemeConstantOverride("separation", 5);
-                group.AddChild(DamageEventSummary(timelineEvent, context.Style, expanded, () =>
-                {
-                    if (!_expanded.Add(timelineEvent.EventId))
-                        _expanded.Remove(timelineEvent.EventId);
-                    RefreshLastPreservingScroll();
-                }));
-                if (expanded)
-                    group.AddChild(DamageEventDetails(timelineEvent, context.Style));
-                Rows.AddChild(group);
-            }
+                return new ReconciledRow(timelineEvent.EventId,
+                    DamageRowFingerprint(timelineEvent, context.Style, expanded), () =>
+                    {
+                        var group = new VBoxContainer();
+                        group.AddThemeConstantOverride("separation", 5);
+                        group.AddChild(DamageEventSummary(timelineEvent, context.Style, expanded, () =>
+                        {
+                            if (!_expanded.Add(timelineEvent.EventId))
+                                _expanded.Remove(timelineEvent.EventId);
+                            RefreshLastPreservingScroll();
+                        }));
+                        if (expanded)
+                            group.AddChild(DamageEventDetails(timelineEvent, context.Style));
+                        return group;
+                    });
+            }));
 
             Status.Text = ModLocalization.Format("dashboard.damage.status",
                 "{0} damage events with causal analysis", events.Length);
+        }
+
+        private static string DamageRowFingerprint(
+            CombatTimelineEvent timelineEvent,
+            DashboardStyleDefinition style,
+            bool expanded)
+        {
+            var damage = timelineEvent.Damage!;
+            var contributions = string.Join('\u001f', damage.Contributions.Select(item =>
+                $"{item.Source.DisplayName}:{item.RawContribution}:{item.EffectiveContribution}"));
+            return string.Join("\u001e",
+                timelineEvent.Sequence,
+                timelineEvent.DisplayText,
+                timelineEvent.Actor?.DisplayName,
+                timelineEvent.Target?.DisplayName,
+                timelineEvent.Source?.DisplayName,
+                timelineEvent.Value,
+                damage.RequestedAmount,
+                damage.ModifiedAmount,
+                damage.BlockedAmount,
+                damage.HpLost,
+                expanded,
+                contributions,
+                VisualStyleFingerprint(style));
         }
 
         private static PanelContainer DamageEventSummary(
