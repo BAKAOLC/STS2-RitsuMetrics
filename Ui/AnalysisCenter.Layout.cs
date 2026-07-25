@@ -215,7 +215,7 @@ namespace STS2RitsuMetrics.Ui
                 SizeFlagsHorizontal = SizeFlags.ExpandFill,
             };
             DashboardControlTheme.ApplySearch(_search);
-            _search.TextChanged += _ => _searchDelay = SearchDelaySeconds;
+            _search.TextChanged += _ => ScheduleSearch();
             historyRoot.AddChild(_search);
             var historyScroll = new DashboardScrollContainer();
             historyRoot.AddChild(historyScroll);

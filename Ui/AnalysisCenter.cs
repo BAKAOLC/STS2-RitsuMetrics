@@ -32,7 +32,6 @@ namespace STS2RitsuMetrics.Ui
         private string[] _dashboardIds = [];
         private Button _deleteRun = null!;
         private DashboardDialogController _dialogs = null!;
-        private bool _dirty = true;
         private int _historyHash;
         private long _historyLoadRevision;
         private int _historyRevision;
@@ -43,7 +42,7 @@ namespace STS2RitsuMetrics.Ui
         private DashboardDropdown _metric = null!;
         private Control _metricField = null!;
         private string[] _metricIds = [];
-        private double _refreshDelay;
+        private bool _refreshScheduled;
         private DashboardRegistry _registry = null!;
         private IDashboardRenderer? _renderer;
         private DashboardDefinition? _rendererDefinition;
@@ -51,7 +50,7 @@ namespace STS2RitsuMetrics.Ui
         private RunSnapshot[] _runs = [];
         private DashboardDropdown _scope = null!;
         private LineEdit _search = null!;
-        private double _searchDelay = -1d;
+        private int _searchRevision;
         private string? _selectedCombatId;
         private RunSnapshot? _selectedRunData;
         private string? _selectedRunId;
@@ -70,7 +69,6 @@ namespace STS2RitsuMetrics.Ui
             RebuildOptions();
             ApplyFullscreenGeometry();
             GetViewport().SizeChanged += OnViewportSizeChanged;
-            SetProcess(true);
             Hide();
         }
 
@@ -80,23 +78,11 @@ namespace STS2RitsuMetrics.Ui
             DisposeRenderer();
         }
 
-        public override void _Process(double delta)
+        private void RefreshIfNeeded()
         {
-            if (!Visible)
+            _refreshScheduled = false;
+            if (!Visible || !IsInsideTree())
                 return;
-            var historyLoadRevision = ModData.HistoryLoadRevision;
-            if (_historyLoadRevision != historyLoadRevision)
-            {
-                _historyLoadRevision = historyLoadRevision;
-                ReloadRuns();
-            }
-
-            ProcessPendingSearch(delta);
-            _refreshDelay -= delta;
-            if (!_dirty || _refreshDelay > 0d)
-                return;
-            _refreshDelay = 0.3d;
-            _dirty = false;
             MergeLiveRun();
             RefreshHistoryIfNeeded();
             RefreshRenderer();
@@ -151,7 +137,17 @@ namespace STS2RitsuMetrics.Ui
 
         internal void MarkDirty()
         {
-            _dirty = true;
+            if (_refreshScheduled || !Visible || !IsInsideTree())
+                return;
+            _refreshScheduled = true;
+            Callable.From(RefreshIfNeeded).CallDeferred();
+        }
+
+        internal void HistoryLoaded()
+        {
+            _historyLoadRevision = ModData.HistoryLoadRevision;
+            if (Visible)
+                ReloadRuns();
         }
 
         internal void DisposeRenderer()
@@ -438,14 +434,12 @@ namespace STS2RitsuMetrics.Ui
                     text.Contains(term, StringComparison.CurrentCultureIgnoreCase));
         }
 
-        private void ProcessPendingSearch(double delta)
+        private async void ScheduleSearch()
         {
-            if (_searchDelay < 0d)
+            var revision = ++_searchRevision;
+            await ToSignal(GetTree().CreateTimer(SearchDelaySeconds), SceneTreeTimer.SignalName.Timeout);
+            if (!IsInsideTree() || revision != _searchRevision)
                 return;
-            _searchDelay -= delta;
-            if (_searchDelay > 0d)
-                return;
-            _searchDelay = -1d;
             var search = _search.Text.Trim();
             if (string.Equals(search, _appliedSearchText, StringComparison.Ordinal))
                 return;

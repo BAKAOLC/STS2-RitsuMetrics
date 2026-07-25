@@ -263,7 +263,7 @@ namespace STS2RitsuMetrics.Core
             NotifyChanged(MetricsChange.All);
         }
 
-        private void NotifyChanged(MetricsChange change)
+        internal void NotifyChanged(MetricsChange change)
         {
             InvokeEach(DataChanged, handler => handler(change), "DataChanged");
             InvokeEach(SnapshotChanged, handler => handler(), "SnapshotChanged");

@@ -13,6 +13,11 @@ namespace STS2RitsuMetrics.Core
             ? "*"
             : string.Join('\u001f', MetricIds.Order(StringComparer.Ordinal));
 
+        internal bool IsAffectedBy(MetricsChange change)
+        {
+            return change.Affects(new(Components, MetricIds));
+        }
+
         internal static DashboardDataPlan Create(
             IEnumerable<(DashboardDataScope Scope, DashboardDataRequirements Requirements)> consumers,
             bool includeAnalysisCenter = false)

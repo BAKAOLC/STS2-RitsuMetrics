@@ -122,14 +122,21 @@ namespace STS2RitsuMetrics.Domain
             bool includeEvents,
             bool includeTimeline,
             bool includeCompletedCombats,
+            bool projectCompletedCombats,
             IReadOnlySet<string>? metricIds)
         {
             lock (_gate)
             {
                 var combats = new List<CombatSnapshot>(_completedCombats.Count + (_activeCombat == null ? 0 : 1));
                 if (includeCompletedCombats)
-                    combats.AddRange(_completedCombats.Select(combat =>
-                        Project(combat, includeEvents, includeTimeline)));
+                {
+                    if (projectCompletedCombats)
+                        combats.AddRange(_completedCombats.Select(combat =>
+                            Project(combat, includeEvents, includeTimeline)));
+                    else
+                        combats.AddRange(_completedCombats);
+                }
+
                 if (_activeCombat != null)
                     combats.Add(_activeCombat.Snapshot(includeEvents, includeTimeline, metricIds));
                 return new(RunId, StartedAtUtc, EndedAtUtc, IsMultiplayer, IsDaily, IsVictory, IsAbandoned,
@@ -174,12 +181,26 @@ namespace STS2RitsuMetrics.Domain
 
     internal sealed class MutableCombatSession
     {
-        private readonly List<MetricObservation> _events = [];
+        private readonly Dictionary<string, CachedEventSnapshot> _cachedEventSnapshots =
+            new(StringComparer.Ordinal);
+
+        private readonly Dictionary<CombatSnapshotCacheKey, CachedCombatSnapshot> _cachedSnapshots = [];
+        private readonly Dictionary<string, long> _eventMetricRevisions = new(StringComparer.Ordinal);
+
+        private readonly AppendOnlySnapshotBuffer<MetricObservation> _events = new();
+
+        private readonly Dictionary<string, AppendOnlySnapshotBuffer<MetricObservation>> _eventsByMetric =
+            new(StringComparer.Ordinal);
+
         private readonly Lock _gate = new();
+        private readonly Dictionary<string, long> _metricRevisions = new(StringComparer.Ordinal);
         private readonly Dictionary<string, MutablePlayerMetrics> _players = new(StringComparer.Ordinal);
-        private readonly List<CombatTimelineEvent> _timeline = [];
+        private readonly AppendOnlySnapshotBuffer<CombatTimelineEvent> _timeline = new();
         private int _droppedEvents;
         private int _droppedTimelineEvents;
+        private long _eventRevision;
+        private long _metadataRevision;
+        private long _metricRevision;
 
         public required string RunId { get; init; }
         public required string CombatId { get; init; }
@@ -206,6 +227,17 @@ namespace STS2RitsuMetrics.Domain
                 RoundCount = source.RoundCount,
             };
             session._events.AddRange(source.Events);
+            foreach (var observation in source.Events)
+            {
+                if (!session._eventsByMetric.TryGetValue(observation.MetricId, out var metricEvents))
+                {
+                    metricEvents = new();
+                    session._eventsByMetric.Add(observation.MetricId, metricEvents);
+                }
+
+                metricEvents.Add(observation);
+            }
+
             session._timeline.AddRange(source.Timeline ?? []);
             foreach (var player in source.Players)
                 session._players[player.PlayerKey] = MutablePlayerMetrics.Restore(player);
@@ -216,7 +248,11 @@ namespace STS2RitsuMetrics.Domain
         {
             lock (_gate)
             {
-                RoundCount = Math.Max(RoundCount, round);
+                var next = Math.Max(RoundCount, round);
+                if (RoundCount == next)
+                    return;
+                RoundCount = next;
+                _metadataRevision++;
             }
         }
 
@@ -224,7 +260,10 @@ namespace STS2RitsuMetrics.Domain
         {
             lock (_gate)
             {
+                if (EndedAtUtc == endedAtUtc)
+                    return;
                 EndedAtUtc = endedAtUtc;
+                _metadataRevision++;
             }
         }
 
@@ -239,10 +278,25 @@ namespace STS2RitsuMetrics.Domain
                 }
 
                 player.Add(observation);
+                _metricRevision++;
+                _metricRevisions[observation.MetricId] = _metricRevision;
                 if (_events.Count < maxEvents)
+                {
                     _events.Add(observation);
+                    if (!_eventsByMetric.TryGetValue(observation.MetricId, out var metricEvents))
+                    {
+                        metricEvents = new();
+                        _eventsByMetric.Add(observation.MetricId, metricEvents);
+                    }
+
+                    metricEvents.Add(observation);
+                    _eventRevision++;
+                    _eventMetricRevisions[observation.MetricId] = _eventRevision;
+                }
                 else
+                {
                     _droppedEvents++;
+                }
             }
         }
 
@@ -282,16 +336,25 @@ namespace STS2RitsuMetrics.Domain
         {
             lock (_gate)
             {
+                var metricSelectionKey = SelectionKey(metricIds);
+                var cacheKey = new CombatSnapshotCacheKey(includeEvents, includeTimeline, metricSelectionKey);
+                var revision = new CombatSnapshotRevision(
+                    RevisionFor(_metricRevision, _metricRevisions, metricIds),
+                    includeEvents
+                        ? RevisionFor(_eventRevision, _eventMetricRevisions, metricIds)
+                        : 0,
+                    includeTimeline ? _timeline.Revision : 0,
+                    _metadataRevision);
+                if (_cachedSnapshots.TryGetValue(cacheKey, out var cached) && cached.Revision == revision)
+                    return cached.Snapshot;
+
                 var players = _players.Values.Select(p => p.Snapshot(metricIds))
                     .OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase).ToList().AsReadOnly();
-                IReadOnlyList<MetricObservation> events = includeEvents
-                    ? _events.Where(observation => metricIds == null ||
-                                                   metricIds.Contains(observation.MetricId)).ToList().AsReadOnly()
-                    : Array.Empty<MetricObservation>();
-                IReadOnlyList<CombatTimelineEvent> timeline = includeTimeline
-                    ? _timeline.ToList().AsReadOnly()
-                    : Array.Empty<CombatTimelineEvent>();
-                return new(
+                var events = includeEvents ? EventSnapshot(metricIds, metricSelectionKey) : [];
+                var timeline = includeTimeline
+                    ? _timeline.GetSnapshot()
+                    : [];
+                var snapshot = new CombatSnapshot(
                     RunId,
                     CombatId,
                     ActIndex,
@@ -305,18 +368,84 @@ namespace STS2RitsuMetrics.Domain
                     players,
                     events,
                     timeline);
+                if (_cachedSnapshots.Count >= 32)
+                    _cachedSnapshots.Clear();
+                _cachedSnapshots[cacheKey] = new(revision, snapshot);
+                return snapshot;
             }
         }
+
+        private IReadOnlyList<MetricObservation> EventSnapshot(
+            IReadOnlySet<string>? metricIds,
+            string metricSelectionKey)
+        {
+            if (metricIds == null)
+                return _events.GetSnapshot();
+            if (metricIds.Count == 1)
+                return _eventsByMetric.TryGetValue(metricIds.First(), out var metricEvents)
+                    ? metricEvents.GetSnapshot()
+                    : [];
+
+            var revision = RevisionFor(_eventRevision, _eventMetricRevisions, metricIds);
+            if (_cachedEventSnapshots.TryGetValue(metricSelectionKey, out var cached) &&
+                cached.Revision == revision)
+                return cached.Events;
+
+            var events = _events.GetSnapshot().Where(observation => metricIds.Contains(observation.MetricId))
+                .ToArray();
+            if (_cachedEventSnapshots.Count >= 16)
+                _cachedEventSnapshots.Clear();
+            _cachedEventSnapshots[metricSelectionKey] = new(revision, events);
+            return events;
+        }
+
+        private static long RevisionFor(
+            long allRevision,
+            IReadOnlyDictionary<string, long> revisions,
+            IReadOnlySet<string>? metricIds)
+        {
+            return metricIds == null
+                ? allRevision
+                : metricIds.Select(id => revisions.GetValueOrDefault(id)).DefaultIfEmpty().Max();
+        }
+
+        private static string SelectionKey(IReadOnlySet<string>? metricIds)
+        {
+            return metricIds == null ? "*" : string.Join('\u001f', metricIds.Order(StringComparer.Ordinal));
+        }
+
+        private readonly record struct CombatSnapshotCacheKey(
+            bool IncludeEvents,
+            bool IncludeTimeline,
+            string MetricSelectionKey);
+
+        private readonly record struct CombatSnapshotRevision(
+            long Metrics,
+            long Events,
+            long Timeline,
+            long Metadata);
+
+        private readonly record struct CachedCombatSnapshot(
+            CombatSnapshotRevision Revision,
+            CombatSnapshot Snapshot);
+
+        private readonly record struct CachedEventSnapshot(
+            long Revision,
+            IReadOnlyList<MetricObservation> Events);
     }
 
     internal readonly record struct CaptureBufferDiagnostics(int DroppedObservations, int DroppedTimelineEvents);
 
     internal sealed class MutablePlayerMetrics(EntityDescriptor player)
     {
+        private readonly Dictionary<string, CachedPlayerSnapshot> _cachedSnapshots = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, long> _metricRevisions = new(StringComparer.Ordinal);
+
         private readonly Dictionary<string, Dictionary<string, MutableSourceMetric>> _sources =
             new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, decimal> _totals = new(StringComparer.Ordinal);
+        private long _revision;
 
         public static MutablePlayerMetrics Restore(PlayerMetricSnapshot snapshot)
         {
@@ -343,6 +472,8 @@ namespace STS2RitsuMetrics.Domain
         public void Add(MetricObservation observation)
         {
             _totals[observation.MetricId] = _totals.GetValueOrDefault(observation.MetricId) + observation.Value;
+            _revision++;
+            _metricRevisions[observation.MetricId] = _revision;
             if (!_sources.TryGetValue(observation.MetricId, out var bySource))
             {
                 bySource = new(StringComparer.Ordinal);
@@ -355,8 +486,7 @@ namespace STS2RitsuMetrics.Domain
                 bySource.Add(observation.Source.Key, source);
             }
 
-            source.Value += observation.Value;
-            source.Occurrences++;
+            source.Add(observation.Value);
         }
 
         public PlayerMetricSnapshot Snapshot()
@@ -366,6 +496,15 @@ namespace STS2RitsuMetrics.Domain
 
         internal PlayerMetricSnapshot Snapshot(IReadOnlySet<string>? metricIds)
         {
+            var selectionKey = metricIds == null
+                ? "*"
+                : string.Join('\u001f', metricIds.Order(StringComparer.Ordinal));
+            var revision = metricIds == null
+                ? _revision
+                : metricIds.Select(id => _metricRevisions.GetValueOrDefault(id)).DefaultIfEmpty().Max();
+            if (_cachedSnapshots.TryGetValue(selectionKey, out var cached) && cached.Revision == revision)
+                return cached.Snapshot;
+
             var sourceValues = new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(_sources.Count,
                 StringComparer.Ordinal);
             foreach (var (metricId, values) in _sources)
@@ -384,20 +523,28 @@ namespace STS2RitsuMetrics.Domain
                 ? new(_totals, StringComparer.Ordinal)
                 : _totals.Where(item => metricIds.Contains(item.Key))
                     .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
-            return new(
+            var snapshot = new PlayerMetricSnapshot(
                 player.Key,
                 player.PlayerNetId,
                 player.DisplayName,
                 player.CharacterId,
                 new ReadOnlyDictionary<string, decimal>(totals),
                 sources);
+            if (_cachedSnapshots.Count >= 16)
+                _cachedSnapshots.Clear();
+            _cachedSnapshots[selectionKey] = new(revision, snapshot);
+            return snapshot;
         }
+
+        private readonly record struct CachedPlayerSnapshot(long Revision, PlayerMetricSnapshot Snapshot);
     }
 
     internal sealed class MutableSourceMetric(SourceDescriptor source)
     {
-        public decimal Value { get; set; }
-        public int Occurrences { get; set; }
+        private SourceMetricSnapshot? _snapshot;
+
+        public decimal Value { get; private set; }
+        public int Occurrences { get; private set; }
 
         public static MutableSourceMetric Restore(SourceMetricSnapshot snapshot)
         {
@@ -409,9 +556,16 @@ namespace STS2RitsuMetrics.Domain
             };
         }
 
+        internal void Add(decimal value)
+        {
+            Value += value;
+            Occurrences++;
+            _snapshot = null;
+        }
+
         public SourceMetricSnapshot Snapshot()
         {
-            return new(source.Key, source.Kind, source.ModelId, source.DisplayName, Value,
+            return _snapshot ??= new(source.Key, source.Kind, source.ModelId, source.DisplayName, Value,
                 Occurrences);
         }
     }

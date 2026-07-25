@@ -27,6 +27,7 @@ namespace STS2RitsuMetrics.Data
 
         private static HistoryArchive? _publishedHistoryArchive;
         private static long _publishedHistoryLoadRevision;
+        private static SynchronizationContext? _mainThreadContext;
 
         internal static ModSettings Settings => Store.Get<ModSettings>(ModConstants.SettingsKey);
 
@@ -39,6 +40,7 @@ namespace STS2RitsuMetrics.Data
             get
             {
                 var history = Store.Get<HistoryArchive>(ModConstants.HistoryKey);
+                history.SetLoadCompletionCallback(QueueHistoryLoadCompletion);
                 if (!history.RequiresStorageRewrite)
                     return history;
 
@@ -51,9 +53,11 @@ namespace STS2RitsuMetrics.Data
         }
 
         internal static event Action? HistoryReady;
+        internal static event Action? SettingsChanged;
 
         internal static void Initialize()
         {
+            _mainThreadContext = SynchronizationContext.Current;
             using (RitsuLibFramework.BeginModDataRegistration(ModConstants.ModId))
             {
                 Store.Register(
@@ -80,6 +84,7 @@ namespace STS2RitsuMetrics.Data
             Store.Modify(ModConstants.SettingsKey, modifier);
             if (save)
                 Store.Save(ModConstants.SettingsKey);
+            SettingsChanged?.Invoke();
         }
 
         internal static void ModifyHistory(Action<HistoryArchive> modifier, bool save = true,
@@ -113,6 +118,18 @@ namespace STS2RitsuMetrics.Data
             _publishedHistoryArchive = history;
             Interlocked.Exchange(ref _publishedHistoryLoadRevision, revision);
             HistoryReady?.Invoke();
+        }
+
+        private static void QueueHistoryLoadCompletion()
+        {
+            var context = _mainThreadContext;
+            if (context == null)
+            {
+                Main.Logger.Error("Analytics history completed without a main-thread synchronization context.");
+                return;
+            }
+
+            context.Post(static _ => PumpHistoryLoad(), null);
         }
 
         internal static void OnHistoryWriteCompleted(

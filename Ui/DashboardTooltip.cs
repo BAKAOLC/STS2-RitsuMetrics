@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using Godot;
 using STS2RitsuMetrics.Localization;
 
@@ -9,6 +10,7 @@ namespace STS2RitsuMetrics.Ui
     internal static class DashboardTooltip
     {
         private const string FallbackLayerName = "RitsuMetricsTooltipLayer";
+        private static readonly ConditionalWeakTable<Control, TooltipState> States = new();
 
         internal static void SetValue(
             Control control,
@@ -35,7 +37,12 @@ namespace STS2RitsuMetrics.Ui
             control.TooltipText = string.Empty;
             if (control.MouseFilter == Control.MouseFilterEnum.Ignore)
                 control.MouseFilter = Control.MouseFilterEnum.Pass;
-            control.MouseEntered += () => ShowImmediate(control, text);
+            var state = States.GetOrCreateValue(control);
+            state.Text = text;
+            if (state.Bound)
+                return;
+            state.Bound = true;
+            control.MouseEntered += () => ShowImmediate(control, state.Text);
             control.MouseExited += () => HideImmediate(control);
             control.TreeExiting += () => HideImmediate(control);
             control.GuiInput += input =>
@@ -43,7 +50,7 @@ namespace STS2RitsuMetrics.Ui
                 if (input is not InputEventScreenTouch touch)
                     return;
                 if (touch.Pressed)
-                    ShowImmediate(control, text);
+                    ShowImmediate(control, state.Text);
                 else
                     HideImmediate(control);
             };
@@ -115,6 +122,12 @@ namespace STS2RitsuMetrics.Ui
             var fallback = new CanvasLayer { Name = FallbackLayerName, Layer = 250 };
             node.GetTree().Root.AddChild(fallback);
             return fallback;
+        }
+
+        private sealed class TooltipState
+        {
+            internal bool Bound;
+            internal string Text = string.Empty;
         }
     }
 

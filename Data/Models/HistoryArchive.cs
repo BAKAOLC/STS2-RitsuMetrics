@@ -14,8 +14,10 @@ namespace STS2RitsuMetrics.Data.Models
         private readonly Lock _gate = new();
         private readonly HashSet<string> _mutatedRunIds = new(StringComparer.Ordinal);
         private bool _discardPendingRuns;
+        private Action? _loadCompleted;
         private Exception? _loadFailure;
         private long _loadRevision;
+        private Task<HistoryArchive>? _observedPendingLoad;
         private Task<HistoryArchive>? _pendingLoad;
         private List<RunSnapshot> _runs = [];
 
@@ -58,7 +60,27 @@ namespace STS2RitsuMetrics.Data.Models
 
         internal void AttachPendingLoad(Task<HistoryArchive> pendingLoad)
         {
-            _pendingLoad = pendingLoad;
+            Action? callback;
+            lock (_gate)
+            {
+                _pendingLoad = pendingLoad;
+                callback = _loadCompleted;
+            }
+
+            ObservePendingLoad(pendingLoad, callback);
+        }
+
+        internal void SetLoadCompletionCallback(Action callback)
+        {
+            Task<HistoryArchive>? pending;
+            lock (_gate)
+            {
+                _loadCompleted = callback;
+                pending = _pendingLoad;
+            }
+
+            if (pending != null)
+                ObservePendingLoad(pending, callback);
         }
 
         internal void ApplyMutation(Action<HistoryArchive> modifier)
@@ -108,6 +130,25 @@ namespace STS2RitsuMetrics.Data.Models
             if (pending is not { IsCompleted: true })
                 return;
             CompletePendingLoad(false);
+        }
+
+        private void ObservePendingLoad(Task<HistoryArchive> pending, Action? callback)
+        {
+            if (callback == null)
+                return;
+            lock (_gate)
+            {
+                if (ReferenceEquals(_observedPendingLoad, pending))
+                    return;
+                _observedPendingLoad = pending;
+            }
+
+            _ = pending.ContinueWith(
+                static (_, state) => ((Action)state!).Invoke(),
+                callback,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         private void CompletePendingLoad(bool wait)

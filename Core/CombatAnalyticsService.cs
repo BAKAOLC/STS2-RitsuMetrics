@@ -370,6 +370,7 @@ namespace STS2RitsuMetrics.Core
             _captureActive = true;
             _currentState = evt.CombatState ?? room?.CombatState;
             ResetCombatState();
+            collectors.NotifyChanged(new(MetricsChangeKind.RunStructure));
             if (resumeRestored)
                 RestoreCombatState(combat);
             AttachHistory(CombatManager.Instance.History);

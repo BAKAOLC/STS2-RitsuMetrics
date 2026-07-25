@@ -148,9 +148,16 @@ namespace STS2RitsuMetrics.Ui
         private readonly HBoxContainer _footer;
         private readonly Label _footerContext;
         private readonly Dictionary<string, ReconciledRowState> _reconciledRows = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string Key, string Fingerprint), float> _variableRowHeights = [];
+        private RendererChromeState? _chromeState;
         private string _compactFooterContext = string.Empty;
         private string _fullFooterContext = string.Empty;
         private Action? _scopeToggle;
+        private bool _variableMeasurementPending;
+        private VariableReconciledRow[]? _variableVirtualRows;
+        private float _virtualRowExtent;
+        private ReconciledRow[]? _virtualRows;
+        private string[] _visibleVariableRowKeys = [];
 
         protected DashboardRendererBase()
         {
@@ -165,6 +172,7 @@ namespace STS2RitsuMetrics.Ui
             Toolbar.AddThemeConstantOverride("separation", 6);
             View.AddChild(Toolbar);
             Scroll = new();
+            Scroll.VisibleRangeChanged += ApplyVirtualizedRows;
             Rows = new()
             {
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
@@ -178,7 +186,7 @@ namespace STS2RitsuMetrics.Ui
             _footer.Resized += UpdateFooterLayout;
             Status = new()
             {
-                AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                AutowrapMode = TextServer.AutowrapMode.Off,
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                 ClipText = true,
                 TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
@@ -231,14 +239,22 @@ namespace STS2RitsuMetrics.Ui
             if (!ReconcileRowsOnRefresh)
                 Clear(Rows);
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
-            View.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
-            Toolbar.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
-            Rows.AddThemeConstantOverride("separation", singleLine ? 2 : 4);
-            Status.AddThemeFontSizeOverride("font_size", Math.Max(11, context.Style.FontSize - 1));
-            Status.Modulate = ColorOf(context.Style.SecondaryTextColor);
-            Status.AutowrapMode = TextServer.AutowrapMode.Off;
-            _footerContext.AddThemeFontSizeOverride("font_size", Math.Max(11, context.Style.FontSize - 1));
-            _footerContext.Modulate = ColorOf(context.Style.SecondaryTextColor);
+            var chromeState = new RendererChromeState(
+                singleLine,
+                Math.Max(11, context.Style.FontSize - 1),
+                ColorOf(context.Style.SecondaryTextColor));
+            if (_chromeState != chromeState)
+            {
+                View.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
+                Toolbar.AddThemeConstantOverride("separation", singleLine ? 3 : 6);
+                Rows.AddThemeConstantOverride("separation", singleLine ? 2 : 4);
+                Status.AddThemeFontSizeOverride("font_size", chromeState.FooterFontSize);
+                Status.Modulate = chromeState.SecondaryTextColor;
+                _footerContext.AddThemeFontSizeOverride("font_size", chromeState.FooterFontSize);
+                _footerContext.Modulate = chromeState.SecondaryTextColor;
+                _chromeState = chromeState;
+            }
+
             CompactSubtitle = null;
             Render(context);
             Rows.CustomMinimumSize = new(Rows.CustomMinimumSize.X, 0f);
@@ -263,6 +279,190 @@ namespace STS2RitsuMetrics.Ui
         public string? AccentColor { get; protected set; }
 
         protected void ReconcileRows(IEnumerable<ReconciledRow> rows)
+        {
+            _virtualRows = null;
+            _variableVirtualRows = null;
+            ReconcileRowsCore(rows);
+        }
+
+        protected void ReconcileVirtualRows(IEnumerable<ReconciledRow> rows, float rowExtent)
+        {
+            _virtualRows = rows.ToArray();
+            _variableVirtualRows = null;
+            _virtualRowExtent = Math.Max(1f, rowExtent);
+            ApplyVirtualRows();
+        }
+
+        protected void ReconcileVariableVirtualRows(IEnumerable<VariableReconciledRow> rows)
+        {
+            _virtualRows = null;
+            _variableVirtualRows = rows.ToArray();
+            var current = _variableVirtualRows.Select(item => (item.Row.Key, item.Row.Fingerprint)).ToHashSet();
+            foreach (var stale in _variableRowHeights.Keys.Where(key => !current.Contains(key)).ToArray())
+                _variableRowHeights.Remove(stale);
+            ApplyVariableVirtualRows();
+        }
+
+        private void ApplyVirtualizedRows()
+        {
+            ApplyVirtualRows();
+            ApplyVariableVirtualRows();
+        }
+
+        private void ApplyVirtualRows()
+        {
+            if (_virtualRows == null)
+                return;
+            var range = VirtualListRange.Calculate(
+                _virtualRows.Length,
+                Scroll.ScrollVertical,
+                Scroll.Size.Y,
+                _virtualRowExtent);
+            var separation = _chromeState?.SingleLine == true ? 2f : 4f;
+            var topHeight = Math.Max(0f, range.Start * _virtualRowExtent - separation);
+            var bottomHeight = Math.Max(0f,
+                (_virtualRows.Length - range.End) * _virtualRowExtent - separation);
+            var visible = new List<ReconciledRow>(range.Count + 2)
+            {
+                Spacer("__virtual_top", topHeight),
+            };
+            for (var index = range.Start; index < range.End; index++)
+                visible.Add(_virtualRows[index]);
+            visible.Add(Spacer("__virtual_bottom", bottomHeight));
+            ReconcileRowsCore(visible);
+            return;
+
+            static ReconciledRow Spacer(string key, float height)
+            {
+                return new(key, "spacer", () => new()
+                    {
+                        MouseFilter = Control.MouseFilterEnum.Ignore,
+                    },
+                    control =>
+                    {
+                        var visible = height > 0.5f;
+                        if (control.Visible != visible)
+                            control.Visible = visible;
+                        var size = new Vector2(0f, visible ? height : 0f);
+                        if (control.CustomMinimumSize != size)
+                            control.CustomMinimumSize = size;
+                    });
+            }
+        }
+
+        private void ApplyVariableVirtualRows()
+        {
+            if (_variableVirtualRows == null)
+                return;
+            var separation = _chromeState?.SingleLine == true ? 2f : 4f;
+            var offsets = new float[_variableVirtualRows.Length + 1];
+            for (var index = 0; index < _variableVirtualRows.Length; index++)
+            {
+                var descriptor = _variableVirtualRows[index];
+                var height = _variableRowHeights.GetValueOrDefault(
+                    (descriptor.Row.Key, descriptor.Row.Fingerprint),
+                    descriptor.EstimatedHeight);
+                offsets[index + 1] = offsets[index] + Math.Max(1f, height) + separation;
+            }
+
+            var range = VariableRange(offsets, Scroll.ScrollVertical, Scroll.Size.Y, 240f);
+            var visible = new List<ReconciledRow>(range.Count + 2)
+            {
+                VariableSpacer("__virtual_top", Math.Max(0f, offsets[range.Start] - separation)),
+            };
+            for (var index = range.Start; index < range.End; index++)
+                visible.Add(_variableVirtualRows[index].Row);
+            visible.Add(VariableSpacer("__virtual_bottom",
+                Math.Max(0f, offsets[^1] - offsets[range.End] - separation)));
+            _visibleVariableRowKeys = _variableVirtualRows[range.Start..range.End]
+                .Select(item => item.Row.Key).ToArray();
+            ReconcileRowsCore(visible);
+            ScheduleVariableRowMeasurement();
+        }
+
+        private void ScheduleVariableRowMeasurement()
+        {
+            if (_variableMeasurementPending || !View.IsInsideTree())
+                return;
+            _variableMeasurementPending = true;
+            Callable.From(() =>
+            {
+                _variableMeasurementPending = false;
+                if (_variableVirtualRows == null || !View.IsInsideTree())
+                    return;
+                var changed = false;
+                var descriptors = _variableVirtualRows.ToDictionary(item => item.Row.Key, StringComparer.Ordinal);
+                foreach (var key in _visibleVariableRowKeys)
+                {
+                    if (!descriptors.TryGetValue(key, out var descriptor) ||
+                        !_reconciledRows.TryGetValue(key, out var state) ||
+                        !GodotObject.IsInstanceValid(state.Control))
+                        continue;
+                    var measured = Math.Max(1f, state.Control.GetCombinedMinimumSize().Y);
+                    var cacheKey = (key, descriptor.Row.Fingerprint);
+                    if (_variableRowHeights.TryGetValue(cacheKey, out var previous) &&
+                        MathF.Abs(previous - measured) <= 0.5f)
+                        continue;
+                    _variableRowHeights[cacheKey] = measured;
+                    changed = true;
+                }
+
+                if (changed)
+                    ApplyVariableVirtualRows();
+            }).CallDeferred();
+        }
+
+        private static VirtualListRange VariableRange(
+            IReadOnlyList<float> offsets,
+            float scrollOffset,
+            float viewportHeight,
+            float overscan)
+        {
+            var itemCount = offsets.Count - 1;
+            if (itemCount <= 0)
+                return new(0, 0);
+            var viewport = viewportHeight > 0f ? viewportHeight : 480f;
+            var startOffset = Math.Max(0f, scrollOffset - overscan);
+            var endOffset = Math.Max(startOffset, scrollOffset + viewport + overscan);
+            var start = Math.Max(0, UpperBound(offsets, startOffset) - 1);
+            var end = Math.Clamp(UpperBound(offsets, endOffset), start + 1, itemCount);
+            return new(start, end);
+        }
+
+        private static int UpperBound(IReadOnlyList<float> values, float target)
+        {
+            var low = 0;
+            var high = values.Count;
+            while (low < high)
+            {
+                var middle = low + (high - low) / 2;
+                if (values[middle] <= target)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+
+            return low;
+        }
+
+        private static ReconciledRow VariableSpacer(string key, float height)
+        {
+            return new(key, "spacer", () => new()
+                {
+                    MouseFilter = Control.MouseFilterEnum.Ignore,
+                },
+                control =>
+                {
+                    var visible = height > 0.5f;
+                    if (control.Visible != visible)
+                        control.Visible = visible;
+                    var size = new Vector2(0f, visible ? height : 0f);
+                    if (control.CustomMinimumSize != size)
+                        control.CustomMinimumSize = size;
+                });
+        }
+
+        private void ReconcileRowsCore(IEnumerable<ReconciledRow> rows)
         {
             var requested = rows.ToArray();
             var plan = KeyedReconciliation.Plan(
@@ -293,7 +493,9 @@ namespace STS2RitsuMetrics.Ui
                     Rows.AddChild(control);
                 }
 
-                Rows.MoveChild(control, decision.Index);
+                if (control.GetIndex() != decision.Index)
+                    Rows.MoveChild(control, decision.Index);
+                row.Update?.Invoke(control);
                 next.Add(row.Key, new(row.Fingerprint, control));
             }
 
@@ -320,8 +522,14 @@ namespace STS2RitsuMetrics.Ui
 
         public void SetFooterContext(string? text, string? compactText)
         {
-            _fullFooterContext = text ?? string.Empty;
-            _compactFooterContext = compactText ?? string.Empty;
+            var full = text ?? string.Empty;
+            var compact = compactText ?? string.Empty;
+            if (string.Equals(_fullFooterContext, full, StringComparison.Ordinal) &&
+                string.Equals(_compactFooterContext, compact, StringComparison.Ordinal))
+                return;
+
+            _fullFooterContext = full;
+            _compactFooterContext = compact;
             _footerContext.Visible = !string.IsNullOrWhiteSpace(_fullFooterContext);
             UpdateFooterLayout();
         }
@@ -836,6 +1044,7 @@ namespace STS2RitsuMetrics.Ui
             header.AddThemeConstantOverride("separation", 6);
 
             var rankLabel = Label(rank.ToString(CultureInfo.CurrentCulture), style, true, style.FontSize);
+            rankLabel.Name = "MetricMeterRank";
             rankLabel.CustomMinimumSize = new(20, 0);
             rankLabel.Modulate = ColorOf(style.WarningColor);
             rankLabel.HorizontalAlignment = HorizontalAlignment.Center;
@@ -849,6 +1058,7 @@ namespace STS2RitsuMetrics.Ui
             header.AddChild(name);
 
             var amount = Label(Format(value), style, false, style.FontSize + 3);
+            amount.Name = "MetricMeterValue";
             amount.CustomMinimumSize = new(64, 0);
             amount.HorizontalAlignment = HorizontalAlignment.Right;
             amount.VerticalAlignment = VerticalAlignment.Center;
@@ -856,6 +1066,7 @@ namespace STS2RitsuMetrics.Ui
 
             var share = Label(showPercentages ? total > 0m ? $"{value / total:P1}" : "—" : string.Empty,
                 style, true, style.FontSize - 1);
+            share.Name = "MetricMeterShare";
             share.CustomMinimumSize = new(48, 0);
             share.HorizontalAlignment = HorizontalAlignment.Right;
             share.VerticalAlignment = VerticalAlignment.Center;
@@ -866,6 +1077,7 @@ namespace STS2RitsuMetrics.Ui
 
             var bar = new ProgressBar
             {
+                Name = "MetricMeterProgress",
                 CustomMinimumSize = new(0, 6),
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                 ShowPercentage = false,
@@ -910,6 +1122,7 @@ namespace STS2RitsuMetrics.Ui
             row.AddThemeConstantOverride("separation", 4);
 
             var rankLabel = Label(rank.ToString(CultureInfo.CurrentCulture), style, true, style.FontSize);
+            rankLabel.Name = "MetricMeterRank";
             rankLabel.CustomMinimumSize = new(20, 0);
             rankLabel.Modulate = ColorOf(style.WarningColor);
             rankLabel.HorizontalAlignment = HorizontalAlignment.Center;
@@ -921,8 +1134,64 @@ namespace STS2RitsuMetrics.Ui
             var valueText = showPercentages && total > 0m
                 ? $"{Format(value)}  ·  {value / total:P1}"
                 : Format(value);
-            row.AddChild(Meter(player.DisplayName, valueText, value, maximum, accent, style, rowHeight));
+            var meter = Meter(player.DisplayName, valueText, value, maximum, accent, style, rowHeight);
+            meter.Name = "MetricMeterProgress";
+            if (meter.GetChild(1) is HBoxContainer labels && labels.GetChildCount() >= 2)
+            {
+                labels.GetChild<Label>(0).Name = "MetricMeterName";
+                labels.GetChild<Label>(1).Name = "MetricMeterValue";
+            }
+
+            row.AddChild(meter);
             return row;
+        }
+
+        protected static void UpdatePlayerMeterRow(
+            Control content,
+            int rank,
+            decimal value,
+            decimal total,
+            decimal maximum,
+            bool showPercentages,
+            bool singleLine)
+        {
+            if (content.FindChild("MetricMeterRank", true, false) is Label rankLabel)
+            {
+                var text = rank.ToString(CultureInfo.CurrentCulture);
+                if (!string.Equals(rankLabel.Text, text, StringComparison.Ordinal))
+                    rankLabel.Text = text;
+            }
+
+            if (content.FindChild("MetricMeterProgress", true, false) is ProgressBar bar)
+            {
+                var maxValue = Math.Max(1d, (double)maximum);
+                var currentValue = (double)Math.Max(0m, value);
+                if (!Mathf.IsEqualApprox(bar.MaxValue, maxValue))
+                    bar.MaxValue = maxValue;
+                if (!Mathf.IsEqualApprox(bar.Value, currentValue))
+                    bar.Value = currentValue;
+            }
+
+            if (content.FindChild("MetricMeterValue", true, false) is Label amount)
+            {
+                var text = singleLine
+                    ? showPercentages && total > 0m
+                        ? $"{Format(value)}  ·  {value / total:P1}"
+                        : Format(value)
+                    : Format(value);
+                if (!string.Equals(amount.Text, text, StringComparison.Ordinal))
+                    amount.Text = text;
+            }
+
+            if (content.FindChild("MetricMeterShare", true, false) is not Label share)
+                return;
+            var shareText = showPercentages
+                ? total > 0m ? $"{value / total:P1}" : "—"
+                : string.Empty;
+            if (!string.Equals(share.Text, shareText, StringComparison.Ordinal))
+                share.Text = shareText;
+            if (share.Visible != showPercentages)
+                share.Visible = showPercentages;
         }
 
         private static string PlayerMonogram(string displayName)
@@ -1022,9 +1291,20 @@ namespace STS2RitsuMetrics.Ui
             return Surface(empty, context.Style, context.Style.WarningColor);
         }
 
-        protected sealed record ReconciledRow(string Key, string Fingerprint, Func<Control> Create);
+        protected sealed record ReconciledRow(
+            string Key,
+            string Fingerprint,
+            Func<Control> Create,
+            Action<Control>? Update = null);
+
+        protected sealed record VariableReconciledRow(ReconciledRow Row, float EstimatedHeight);
 
         private readonly record struct ReconciledRowState(string Fingerprint, Control Control);
+
+        private readonly record struct RendererChromeState(
+            bool SingleLine,
+            int FooterFontSize,
+            Color SecondaryTextColor);
     }
 
     internal sealed partial class OverviewRenderer : DashboardRendererBase
@@ -1119,32 +1399,40 @@ namespace STS2RitsuMetrics.Ui
                 var (player, value) = entry;
                 var accent = Accent(context.Style, index);
                 var fingerprint = string.Join("\u001e", MeterStyleFingerprint(context), index, player.DisplayName,
-                    player.CharacterId, value, total, maximum, accent);
-                return new ReconciledRow($"player:{player.PlayerKey}", fingerprint, () =>
-                {
-                    var content = PlayerMeterRow(player, index + 1, value, total, maximum, accent, context.Style,
-                        context.ShowPercentages, singleLine);
-                    var row = InteractiveRow(content, context.Style, accent, singleLine);
-                    DashboardTooltip.Set(row,
-                    [
-                        player.DisplayName,
-                        $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
-                        $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
-                        (total > 0m ? $"{value / total:P1}" : "—"),
-                        ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
-                    ]);
-                    row.GuiInput += input =>
+                    player.CharacterId, accent);
+                return new ReconciledRow(
+                    $"player:{player.PlayerKey}",
+                    fingerprint,
+                    () =>
                     {
-                        if (input is not InputEventMouseButton
-                            {
-                                ButtonIndex: MouseButton.Left, Pressed: true,
-                            })
-                            return;
-                        _selectedPlayerKey = player.PlayerKey;
-                        RefreshLast();
-                    };
-                    return row;
-                });
+                        var content = PlayerMeterRow(player, index + 1, value, total, maximum, accent,
+                            context.Style, context.ShowPercentages, singleLine);
+                        var row = InteractiveRow(content, context.Style, accent, singleLine);
+                        row.GuiInput += input =>
+                        {
+                            if (input is not InputEventMouseButton
+                                {
+                                    ButtonIndex: MouseButton.Left, Pressed: true,
+                                })
+                                return;
+                            _selectedPlayerKey = player.PlayerKey;
+                            RefreshLast();
+                        };
+                        return row;
+                    },
+                    row =>
+                    {
+                        UpdatePlayerMeterRow(row, index + 1, value, total, maximum, context.ShowPercentages,
+                            singleLine);
+                        DashboardTooltip.Set(row,
+                        [
+                            player.DisplayName,
+                            $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
+                            $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
+                            (total > 0m ? $"{value / total:P1}" : "—"),
+                            ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
+                        ]);
+                    });
             }));
         }
 
@@ -1481,6 +1769,8 @@ namespace STS2RitsuMetrics.Ui
     {
         private Dictionary<string, CombatTimelineEvent> _eventById = new(StringComparer.Ordinal);
 
+        protected override bool CollapseSemanticMoves => true;
+
         protected override void Render(DashboardRenderContext context)
         {
             _eventById = context.Snapshot == null
@@ -1509,12 +1799,6 @@ namespace STS2RitsuMetrics.Ui
                    DashboardLocalization.TimelineDescription(timelineEvent, origin.Source, origin.Actor);
         }
 
-        protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
-        {
-            return CollapseSemanticCardMoves(timelineEvents);
-        }
-
         protected override Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
         {
             var row = new HBoxContainer { CustomMinimumSize = new(0, style.RowHeight) };
@@ -1540,6 +1824,11 @@ namespace STS2RitsuMetrics.Ui
             return surface;
         }
 
+        protected override float VirtualRowHeight(DashboardStyleDefinition style)
+        {
+            return style.RowHeight + 8f;
+        }
+
         private (EntityDescriptor? Actor, SourceDescriptor? Source) CausalOrigin(
             CombatTimelineEvent timelineEvent)
         {
@@ -1560,12 +1849,20 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class ReceivedDamageRenderer : DashboardRendererBase
     {
+        protected override bool ReconcileRowsOnRefresh => true;
+
         public override DashboardDataRequirements GetDataRequirements(
             DashboardDataScope scope,
             IReadOnlyDictionary<string, string> parameters)
         {
             return new(DashboardDataComponents.Metrics | DashboardDataComponents.Timeline,
-                [MetricIds.DamageBlocked]);
+            [
+                MetricIds.DamageBlocked,
+                MetricIds.DamageTaken,
+                MetricIds.Deaths,
+                MetricIds.SummonDamageTaken,
+                MetricIds.SummonDeaths,
+            ]);
         }
 
         protected override void Render(DashboardRenderContext context)
@@ -1581,6 +1878,7 @@ namespace STS2RitsuMetrics.Ui
                 .PlayerHpLost);
             var ranked = snapshot.Players.OrderByDescending(item =>
                 SnapshotStatistics.Survival(snapshot, item.PlayerNetId).PlayerHpLost).ToArray();
+            var rows = new List<VariableReconciledRow>(ranked.Length + 201);
             for (var index = 0; index < ranked.Length; index++)
             {
                 var player = ranked[index];
@@ -1588,51 +1886,77 @@ namespace STS2RitsuMetrics.Ui
                 var taken = survival.PlayerHpLost;
                 var blocked = Metric(player, MetricIds.DamageBlocked);
                 var accent = Accent(context.Style, index);
-                var card = new VBoxContainer();
-                card.AddThemeConstantOverride("separation", 5);
-                card.AddChild(PlayerHeader(player, index + 1, taken, totalTaken, accent, context.Style,
-                    DashboardPresentation.SingleLine(context.Parameters)));
-                card.AddChild(SegmentedMeter(ModLocalization.Format("dashboard.received.summary",
-                        "{0} HP lost · {1} blocked · {2} deaths", Format(taken), Format(blocked),
-                        survival.PlayerDeaths),
-                    taken,
-                    blocked,
-                    context.Style.NegativeColor,
-                    Accent(context.Style, 1),
-                    context.Style));
-                if (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 })
-                    card.AddChild(WrappedLabel(ModLocalization.Format("dashboard.received.summonSummary",
-                            "Summons: {0} HP lost · {1} deaths", Format(survival.SummonHpLost),
-                            survival.SummonDeaths),
-                        context.Style, true, Math.Max(10, context.Style.FontSize - 1)));
-                Rows.AddChild(Surface(card, context.Style, accent));
+                var rank = index + 1;
+                var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style), player.PlayerKey,
+                    rank, taken, totalTaken, blocked, survival, accent,
+                    DashboardPresentation.SingleLine(context.Parameters));
+                rows.Add(new(new($"player:{player.PlayerKey}", fingerprint, () =>
+                {
+                    var card = new VBoxContainer();
+                    card.AddThemeConstantOverride("separation", 5);
+                    card.AddChild(PlayerHeader(player, rank, taken, totalTaken, accent, context.Style,
+                        DashboardPresentation.SingleLine(context.Parameters)));
+                    card.AddChild(SegmentedMeter(ModLocalization.Format("dashboard.received.summary",
+                            "{0} HP lost · {1} blocked · {2} deaths", Format(taken), Format(blocked),
+                            survival.PlayerDeaths),
+                        taken,
+                        blocked,
+                        context.Style.NegativeColor,
+                        Accent(context.Style, 1),
+                        context.Style));
+                    if (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 })
+                        card.AddChild(WrappedLabel(ModLocalization.Format("dashboard.received.summonSummary",
+                                "Summons: {0} HP lost · {1} deaths", Format(survival.SummonHpLost),
+                                survival.SummonDeaths),
+                            context.Style, true, Math.Max(10, context.Style.FontSize - 1)));
+                    return Surface(card, context.Style, accent);
+                }), survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 } ? 126f : 96f));
             }
 
-            var historyTitle = Label(ModLocalization.Get("dashboard.incomingHistory", "INCOMING HISTORY"),
-                context.Style, true, context.Style.FontSize - 1);
-            historyTitle.Modulate = ColorOf(context.Style.WarningColor);
-            Rows.AddChild(historyTitle);
-            var events = Timeline(snapshot).Where(item =>
-                    item.Kind is CombatTimelineKind.Damage or CombatTimelineKind.HpLoss or
-                        CombatTimelineKind.Execution or CombatTimelineKind.Death &&
-                    item.Target?.Kind is AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon)
-                .TakeLast(200).Reverse();
+            rows.Add(new(new("__history_title", VisualStyleFingerprint(context.Style), () =>
+            {
+                var historyTitle = Label(ModLocalization.Get("dashboard.incomingHistory", "INCOMING HISTORY"),
+                    context.Style, true, context.Style.FontSize - 1);
+                historyTitle.Modulate = ColorOf(context.Style.WarningColor);
+                return historyTitle;
+            }), context.Style.RowHeight));
+            var timeline = Timeline(snapshot);
+            var events = new List<CombatTimelineEvent>(Math.Min(200, timeline.Count));
+            for (var index = timeline.Count - 1; index >= 0 && events.Count < 200; index--)
+            {
+                var timelineEvent = timeline[index];
+                if (timelineEvent.Kind is not (CombatTimelineKind.Damage or CombatTimelineKind.HpLoss or
+                        CombatTimelineKind.Execution or CombatTimelineKind.Death) ||
+                    timelineEvent.Target?.Kind is not (AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon))
+                    continue;
+                events.Add(timelineEvent);
+            }
+
             foreach (var timelineEvent in events)
             {
-                var value = timelineEvent.Value is { } amount ? Format(amount) : string.Empty;
-                var historyRow = new HBoxContainer { CustomMinimumSize = new(0, context.Style.RowHeight - 3) };
-                historyRow.AddChild(Label($"T{timelineEvent.TurnIndex}", context.Style, true));
-                var description = TruncatedLabel($"{timelineEvent.Target?.DisplayName} ← " +
-                                                 $"{timelineEvent.Source?.DisplayName ?? timelineEvent.DisplayText}",
-                    context.Style);
-                historyRow.AddChild(description);
-                var amountLabel = Label(value, context.Style, false, context.Style.FontSize + 2);
-                amountLabel.Modulate = ColorOf(context.Style.NegativeColor);
-                amountLabel.HorizontalAlignment = HorizontalAlignment.Right;
-                historyRow.AddChild(amountLabel);
-                Rows.AddChild(Surface(historyRow, context.Style, context.Style.NegativeColor, 5));
+                var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style),
+                    timelineEvent.TurnIndex, timelineEvent.Target?.DisplayName,
+                    timelineEvent.Source?.DisplayName, timelineEvent.DisplayText, timelineEvent.Value);
+                rows.Add(new(new($"history:{timelineEvent.EventId}", fingerprint, () =>
+                {
+                    var value = timelineEvent.Value is { } amount ? Format(amount) : string.Empty;
+                    var historyRow =
+                        new HBoxContainer { CustomMinimumSize = new(0, context.Style.RowHeight - 3) };
+                    historyRow.AddChild(Label($"T{timelineEvent.TurnIndex}", context.Style, true));
+                    var description = TruncatedLabel($"{timelineEvent.Target?.DisplayName} ← " +
+                                                     $"{timelineEvent.Source?.DisplayName ??
+                                                        timelineEvent.DisplayText}",
+                        context.Style);
+                    historyRow.AddChild(description);
+                    var amountLabel = Label(value, context.Style, false, context.Style.FontSize + 2);
+                    amountLabel.Modulate = ColorOf(context.Style.NegativeColor);
+                    amountLabel.HorizontalAlignment = HorizontalAlignment.Right;
+                    historyRow.AddChild(amountLabel);
+                    return Surface(historyRow, context.Style, context.Style.NegativeColor, 5);
+                }), context.Style.RowHeight + 7f));
             }
 
+            ReconcileVariableVirtualRows(rows);
             Status.Text = ModLocalization.Format("dashboard.received.status", "{0} · incoming damage history",
                 snapshot.EncounterName);
         }
@@ -1640,6 +1964,7 @@ namespace STS2RitsuMetrics.Ui
 
     internal abstract class FilteredTimelineRenderer : DashboardRendererBase
     {
+        private readonly HashSet<int> _knownTurnIndexes = [];
         private readonly DashboardDropdown _player = new();
 
         private readonly LineEdit _search = new()
@@ -1650,6 +1975,9 @@ namespace STS2RitsuMetrics.Ui
         };
 
         private readonly DashboardDropdown _turn = new();
+        private string? _filterCombatId;
+        private int _indexedTimelineCount;
+        private CombatTimelineEvent? _indexedTimelineLast;
         private DashboardRenderContext? _lastContext;
         private string[] _playerKeys = [];
         private int[] _turnIndexes = [];
@@ -1671,6 +1999,8 @@ namespace STS2RitsuMetrics.Ui
         }
 
         protected override bool ReconcileRowsOnRefresh => true;
+
+        protected virtual bool CollapseSemanticMoves => false;
 
         public override DashboardDataRequirements GetDataRequirements(
             DashboardDataScope scope,
@@ -1697,20 +2027,15 @@ namespace STS2RitsuMetrics.Ui
 
             RebuildFilters(snapshot);
             var search = _search.Text.Trim();
-            var events = PrepareEvents(Timeline(snapshot).Where(Include));
             var turn = SelectedTurn();
             var playerKey = SelectedPlayerKey();
-            if (turn != null)
-                events = events.Where(item => item.TurnIndex == turn);
-            if (playerKey != null)
-                events = events.Where(item => IsPlayerEvent(item, playerKey));
-            if (search.Length > 0)
-                events = events.Where(item => SearchText(item).Contains(search, StringComparison.OrdinalIgnoreCase));
-            var selected = SelectEvents(events);
-            ReconcileRows(selected.Select(timelineEvent => new ReconciledRow(
-                timelineEvent.EventId,
-                RowFingerprint(timelineEvent, context.Style),
-                () => CreateRow(timelineEvent, context.Style))));
+            var selected = SelectMatchingEvents(Timeline(snapshot), turn, playerKey, search);
+            var separation = DashboardPresentation.SingleLine(context.Parameters) ? 2f : 4f;
+            ReconcileVirtualRows(selected.Select(timelineEvent => new ReconciledRow(
+                    timelineEvent.EventId,
+                    RowFingerprint(timelineEvent, context.Style),
+                    () => CreateRow(timelineEvent, context.Style))),
+                VirtualRowHeight(context.Style) + separation);
             Status.Text = ModLocalization.Format("dashboard.timeline.status", "{0} events · {1} rounds",
                 selected.Count, snapshot.RoundCount);
         }
@@ -1718,22 +2043,21 @@ namespace STS2RitsuMetrics.Ui
         protected abstract bool Include(CombatTimelineEvent timelineEvent);
         protected abstract string RowText(CombatTimelineEvent timelineEvent);
 
-        protected virtual IEnumerable<CombatTimelineEvent> PrepareEvents(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
+        protected virtual IReadOnlyList<CombatTimelineEvent> FinalizeSelectedEvents(
+            IReadOnlyList<CombatTimelineEvent> timelineEvents)
         {
             return timelineEvents;
-        }
-
-        protected virtual IReadOnlyList<CombatTimelineEvent> SelectEvents(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
-        {
-            return timelineEvents.OrderBy(item => item.Sequence).TakeLast(1500).ToArray();
         }
 
         protected virtual Control CreateRow(CombatTimelineEvent timelineEvent, DashboardStyleDefinition style)
         {
             return WrappedLabel(RowText(timelineEvent), style,
                 timelineEvent.Kind == CombatTimelineKind.DamageModifier);
+        }
+
+        protected virtual float VirtualRowHeight(DashboardStyleDefinition style)
+        {
+            return style.RowHeight;
         }
 
         protected virtual string RowFingerprint(
@@ -1772,20 +2096,34 @@ namespace STS2RitsuMetrics.Ui
                 string.Join(' ', timelineEvent.Details.Select(detail => $"{detail.Key} {detail.Value}")));
         }
 
-        protected static IEnumerable<CombatTimelineEvent> CollapseSemanticCardMoves(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
+        private IReadOnlyList<CombatTimelineEvent> SelectMatchingEvents(
+            IReadOnlyList<CombatTimelineEvent> timelineEvents,
+            int? turn,
+            string? playerKey,
+            string search)
         {
-            var events = timelineEvents.ToArray();
-            for (var index = 0; index < events.Length; index++)
+            const int limit = 1500;
+            var selected = new List<CombatTimelineEvent>(Math.Min(limit, timelineEvents.Count));
+            for (var index = timelineEvents.Count - 1; index >= 0 && selected.Count < limit; index--)
             {
-                var timelineEvent = events[index];
-                if (timelineEvent.ActionId != "card.move" || !HasSemanticCompanion(events, index, timelineEvent))
-                    yield return timelineEvent;
+                var timelineEvent = timelineEvents[index];
+                if (!Include(timelineEvent) ||
+                    (CollapseSemanticMoves && timelineEvent.ActionId == "card.move" &&
+                     HasSemanticCompanion(timelineEvents, index, timelineEvent)) ||
+                    (turn != null && timelineEvent.TurnIndex != turn) ||
+                    (playerKey != null && !IsPlayerEvent(timelineEvent, playerKey)) ||
+                    (search.Length > 0 &&
+                     !SearchText(timelineEvent).Contains(search, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                selected.Add(timelineEvent);
             }
+
+            selected.Reverse();
+            return FinalizeSelectedEvents(selected);
         }
 
         private static bool HasSemanticCompanion(
-            CombatTimelineEvent[] events,
+            IReadOnlyList<CombatTimelineEvent> events,
             int index,
             CombatTimelineEvent cardMove)
         {
@@ -1801,7 +2139,7 @@ namespace STS2RitsuMetrics.Ui
             if (semanticAction == null)
                 return false;
             for (var candidateIndex = index + 1;
-                 candidateIndex < events.Length && candidateIndex <= index + 2;
+                 candidateIndex < events.Count && candidateIndex <= index + 2;
                  candidateIndex++)
             {
                 var candidate = events[candidateIndex];
@@ -1815,9 +2153,24 @@ namespace STS2RitsuMetrics.Ui
 
         private void RebuildFilters(CombatSnapshot? snapshot)
         {
-            var turns = snapshot == null
-                ? []
-                : Timeline(snapshot).Select(item => item.TurnIndex).Distinct().Order().ToArray();
+            var timeline = snapshot == null ? [] : Timeline(snapshot);
+            if (snapshot == null ||
+                !string.Equals(_filterCombatId, snapshot.CombatId, StringComparison.Ordinal) ||
+                (_indexedTimelineCount > 0 &&
+                 (timeline.Count < _indexedTimelineCount ||
+                  !ReferenceEquals(timeline[_indexedTimelineCount - 1], _indexedTimelineLast))))
+            {
+                _filterCombatId = snapshot?.CombatId;
+                _indexedTimelineCount = 0;
+                _indexedTimelineLast = null;
+                _knownTurnIndexes.Clear();
+            }
+
+            for (var index = _indexedTimelineCount; index < timeline.Count; index++)
+                _knownTurnIndexes.Add(timeline[index].TurnIndex);
+            _indexedTimelineCount = timeline.Count;
+            _indexedTimelineLast = timeline.Count == 0 ? null : timeline[^1];
+            var turns = _knownTurnIndexes.Order().ToArray();
             var players =
                 snapshot?.Players.OrderBy(item => item.DisplayName, StringComparer.CurrentCulture).ToArray() ?? [];
             var playerKeys = players.Select(item => item.PlayerKey).ToArray();
@@ -1893,6 +2246,8 @@ namespace STS2RitsuMetrics.Ui
         private DashboardRenderContext? _lastContext;
         private string? _snapshotId;
 
+        protected override bool CollapseSemanticMoves => true;
+
         protected override void Render(DashboardRenderContext context)
         {
             var snapshotId = context.Snapshot?.CombatId;
@@ -1921,16 +2276,10 @@ namespace STS2RitsuMetrics.Ui
             return $"{DashboardLocalization.TimelineDescription(timelineEvent, origin.Source, origin.Actor)}{extra}";
         }
 
-        protected override IEnumerable<CombatTimelineEvent> PrepareEvents(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
+        protected override IReadOnlyList<CombatTimelineEvent> FinalizeSelectedEvents(
+            IReadOnlyList<CombatTimelineEvent> timelineEvents)
         {
-            return CollapseSemanticCardMoves(timelineEvents);
-        }
-
-        protected override IReadOnlyList<CombatTimelineEvent> SelectEvents(
-            IEnumerable<CombatTimelineEvent> timelineEvents)
-        {
-            var window = timelineEvents.OrderBy(item => item.Sequence).TakeLast(1500).ToArray();
+            var window = timelineEvents.ToArray();
             BuildTreeState(window);
             return OrderCausally(window).Where(IsVisible).ToArray();
         }
@@ -2023,6 +2372,11 @@ namespace STS2RitsuMetrics.Ui
             DashboardTooltip.Set(row,
                 DashboardLocalization.TimelineTooltip(timelineEvent, parent, origin.Source, origin.Actor));
             return row;
+        }
+
+        protected override float VirtualRowHeight(DashboardStyleDefinition style)
+        {
+            return style.RowHeight + 2f;
         }
 
         protected override string RowFingerprint(
@@ -2228,16 +2582,24 @@ namespace STS2RitsuMetrics.Ui
             }
 
             var search = _search.Text.Trim();
-            var events = Timeline(snapshot).Where(item => item.Damage != null &&
-                                                          (search.Length == 0 || DamageSearchText(item).Contains(search,
-                                                              StringComparison.OrdinalIgnoreCase)))
-                .OrderBy(item => item.Sequence)
-                .TakeLast(500)
-                .ToArray();
-            ReconcileRows(events.Select(timelineEvent =>
+            var timeline = Timeline(snapshot);
+            var selectedEvents = new List<CombatTimelineEvent>(Math.Min(500, timeline.Count));
+            for (var index = timeline.Count - 1; index >= 0 && selectedEvents.Count < 500; index--)
+            {
+                var timelineEvent = timeline[index];
+                if (timelineEvent.Damage == null ||
+                    (search.Length > 0 && !DamageSearchText(timelineEvent)
+                        .Contains(search, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                selectedEvents.Add(timelineEvent);
+            }
+
+            selectedEvents.Reverse();
+            var events = selectedEvents.ToArray();
+            ReconcileVariableVirtualRows(events.Select(timelineEvent =>
             {
                 var expanded = _expanded.Contains(timelineEvent.EventId);
-                return new ReconciledRow(timelineEvent.EventId,
+                var row = new ReconciledRow(timelineEvent.EventId,
                     DamageRowFingerprint(timelineEvent, context.Style, expanded), () =>
                     {
                         var group = new VBoxContainer();
@@ -2252,6 +2614,12 @@ namespace STS2RitsuMetrics.Ui
                             group.AddChild(DamageEventDetails(timelineEvent, context.Style));
                         return group;
                     });
+                var contributionCount = timelineEvent.Damage!.Contributions.Count(item =>
+                    item.RawContribution != 0m);
+                var estimatedHeight = expanded
+                    ? context.Style.RowHeight + 210f + contributionCount * 24f
+                    : context.Style.RowHeight + 7f;
+                return new VariableReconciledRow(row, estimatedHeight);
             }));
 
             Status.Text = ModLocalization.Format("dashboard.damage.status",

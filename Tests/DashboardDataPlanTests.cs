@@ -69,5 +69,20 @@ namespace STS2RitsuMetrics.Tests
 
             Assert.Equal(["block", "damage"], plan.MetricIds!.Order(StringComparer.Ordinal));
         }
+
+        [Fact]
+        public void MetricOnlyPlanIgnoresTimelineAndUnrelatedMetricChanges()
+        {
+            var plan = DashboardDataPlan.Create(
+            [
+                (DashboardDataScope.CurrentCombat,
+                    new(DashboardDataComponents.Metrics, ["damage"])),
+            ]);
+
+            Assert.False(plan.IsAffectedBy(new(MetricsChangeKind.Timeline)));
+            Assert.False(plan.IsAffectedBy(new(MetricsChangeKind.Metrics, "block")));
+            Assert.True(plan.IsAffectedBy(new(MetricsChangeKind.Metrics, "damage")));
+            Assert.True(plan.IsAffectedBy(new(MetricsChangeKind.RunStructure)));
+        }
     }
 }

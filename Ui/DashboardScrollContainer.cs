@@ -11,6 +11,7 @@ namespace STS2RitsuMetrics.Ui
 
         private int _contentGutter = DefaultContentGutter;
         private bool _layoutRefreshPending;
+        private bool _visibleRangeNotificationPending;
 
         public DashboardScrollContainer()
         {
@@ -27,6 +28,8 @@ namespace STS2RitsuMetrics.Ui
             DashboardControlTheme.ApplyScrollContainer(this);
             _verticalScrollBar = GetVScrollBar();
             _verticalScrollBar.VisibilityChanged += UpdateContentGutter;
+            _verticalScrollBar.ValueChanged += _ => ScheduleVisibleRangeChanged();
+            Resized += ScheduleVisibleRangeChanged;
             Callable.From(UpdateContentGutter).CallDeferred();
         }
 
@@ -42,6 +45,8 @@ namespace STS2RitsuMetrics.Ui
                 UpdateContentGutter();
             }
         }
+
+        internal event Action? VisibleRangeChanged;
 
         public void SetContent(Control content)
         {
@@ -82,6 +87,20 @@ namespace STS2RitsuMetrics.Ui
             var maximum = Math.Max(0d, _verticalScrollBar.MaxValue - _verticalScrollBar.Page);
             ScrollVertical = Math.Min(ScrollVertical, (int)Math.Ceiling(maximum));
             UpdateContentGutter();
+            ScheduleVisibleRangeChanged();
+        }
+
+        private void ScheduleVisibleRangeChanged()
+        {
+            if (_visibleRangeNotificationPending || !IsInsideTree())
+                return;
+            _visibleRangeNotificationPending = true;
+            Callable.From(() =>
+            {
+                _visibleRangeNotificationPending = false;
+                if (IsInsideTree())
+                    VisibleRangeChanged?.Invoke();
+            }).CallDeferred();
         }
     }
 }

@@ -6,7 +6,10 @@ namespace STS2RitsuMetrics.Core
 {
     internal static class SnapshotAggregator
     {
-        internal static CombatSnapshot? Combine(RunSnapshot? run)
+        internal static CombatSnapshot? Combine(
+            RunSnapshot? run,
+            bool includeEvents = true,
+            bool includeTimeline = true)
         {
             if (run == null || run.Combats.Count == 0)
                 return null;
@@ -37,9 +40,11 @@ namespace STS2RitsuMetrics.Core
                 run.EndedAtUtc != null,
                 run.Combats.Sum(combat => combat.RoundCount),
                 players.Values.Select(accumulator => accumulator.Snapshot()).ToArray(),
-                run.Combats.SelectMany(combat => combat.Events).ToArray(),
-                run.Combats.SelectMany(combat => combat.Timeline ?? []).OrderBy(evt => evt.OccurredAtUtc)
-                    .ThenBy(evt => evt.Sequence).ToArray());
+                includeEvents ? run.Combats.SelectMany(combat => combat.Events).ToArray() : [],
+                includeTimeline
+                    ? run.Combats.SelectMany(combat => combat.Timeline ?? []).OrderBy(evt => evt.OccurredAtUtc)
+                        .ThenBy(evt => evt.Sequence).ToArray()
+                    : []);
         }
 
         private sealed class PlayerAccumulator(PlayerMetricSnapshot first)

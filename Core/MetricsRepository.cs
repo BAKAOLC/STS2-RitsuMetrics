@@ -98,12 +98,13 @@ namespace STS2RitsuMetrics.Core
             bool includeEvents,
             bool includeTimeline,
             bool includeCompletedCombats,
+            bool projectCompletedCombats,
             IReadOnlySet<string>? metricIds)
         {
             lock (_gate)
             {
                 return _liveRun?.SnapshotForLiveView(includeEvents, includeTimeline, includeCompletedCombats,
-                    metricIds);
+                    projectCompletedCombats, metricIds);
             }
         }
 

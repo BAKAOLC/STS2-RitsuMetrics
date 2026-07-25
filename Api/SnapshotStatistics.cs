@@ -54,7 +54,10 @@ namespace STS2RitsuMetrics.Api
         {
             var statistics = new Dictionary<ulong, MutableSurvivalStatistics>();
             var timeline = combat.Timeline ?? [];
-            var hasTimeline = timeline.Count > 0;
+            var hasTimeline = timeline.Count > 0 && combat.Players.Any(player =>
+                !player.Totals.ContainsKey(MetricIds.Deaths) &&
+                !player.Totals.ContainsKey(MetricIds.SummonDamageTaken) &&
+                !player.Totals.ContainsKey(MetricIds.SummonDeaths));
             if (hasTimeline)
                 foreach (var timelineEvent in timeline)
                 {

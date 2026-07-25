@@ -16,7 +16,6 @@ namespace STS2RitsuMetrics.Ui
         private const float HeaderVerticalPadding = 2f;
         private const float OpacityTransitionResponse = 18f;
         private const float OpacityTransitionSnapDistance = 0.002f;
-        private const double OpacityTransitionStyleInterval = 0.05d;
         private const double PointerExitGraceSeconds = 0.08d;
         private const double TouchRevealHoldSeconds = 1.5d;
         private const float TitleSelectorHeight = 34f;
@@ -27,7 +26,6 @@ namespace STS2RitsuMetrics.Ui
         private MarginContainer _body = null!;
         private DashboardSelection[] _dashboardSelections = [];
         private DashboardDefinition _definition = null!;
-        private bool _dirty = true;
         private Vector2 _dragOffset;
         private bool _dragging;
         private Label _error = null!;
@@ -39,8 +37,9 @@ namespace STS2RitsuMetrics.Ui
         private Dictionary<string, string>? _parametersBeforePreview;
         private double _pointerExitGraceRemaining;
         private bool _pointerInside;
-        private double _refreshDelay;
         private DashboardRegistry _registry = null!;
+        private bool _renderPending = true;
+        private bool _renderScheduled;
         private IDashboardRenderer _renderer = null!;
         private bool _rendererDisposed;
         private string? _rendererError;
@@ -57,6 +56,7 @@ namespace STS2RitsuMetrics.Ui
         internal string InstanceId => _state.InstanceId;
         internal string DashboardId => _state.DashboardId;
         internal DashboardDataScope DataScope => _state.Scope;
+        internal bool ConsumesDashboardData => Visible && !_state.IsCollapsed && !_rendererDisposed;
 
         internal DashboardDataRequirements DataRequirements =>
             _renderer is IDashboardDataConsumer consumer
@@ -133,13 +133,14 @@ namespace STS2RitsuMetrics.Ui
             if ((_dragging || _resizeEdge != ResizeEdge.None) &&
                 !Input.IsMouseButtonPressed(MouseButton.Left))
                 FinishPointerInteraction();
-            if (_rendererDisposed)
+        }
+
+        private void RenderIfNeeded()
+        {
+            _renderScheduled = false;
+            if (!_renderPending || _rendererDisposed || !Visible || _state.IsCollapsed)
                 return;
-            _refreshDelay -= delta;
-            if (!_dirty || _refreshDelay > 0d || _state.IsCollapsed)
-                return;
-            _refreshDelay = 0.15d;
-            _dirty = false;
+            _renderPending = false;
             var style = ResolveStyle();
             try
             {
@@ -152,10 +153,13 @@ namespace STS2RitsuMetrics.Ui
                     _state.Parameters,
                     ModData.Settings.ShowPercentages,
                     SetParameter));
-                ApplyButtonStyle(_renderer.View, style,
-                    DashboardPresentation.ControlDensity(_state.Parameters));
-                _renderer.View.Visible = true;
-                _error.Visible = false;
+                if (_renderer is not DashboardRendererBase)
+                    ApplyButtonStyle(_renderer.View, style,
+                        DashboardPresentation.ControlDensity(_state.Parameters));
+                if (!_renderer.View.Visible)
+                    _renderer.View.Visible = true;
+                if (_error.Visible)
+                    _error.Visible = false;
                 _rendererError = null;
                 UpdatePresentation(style);
             }
@@ -165,7 +169,6 @@ namespace STS2RitsuMetrics.Ui
                 _error.Text = ModLocalization.Format("analysis.rendererFailed", "Renderer failed: {0}",
                     exception.Message);
                 _error.Visible = true;
-                _refreshDelay = 1d;
                 if (_rendererError == exception.Message)
                     return;
                 _rendererError = exception.Message;
@@ -199,13 +202,14 @@ namespace STS2RitsuMetrics.Ui
 
         internal void MarkDirty()
         {
-            _dirty = true;
+            _renderPending = true;
+            ScheduleRender();
         }
 
         internal void MarkDirty(MetricsChange change)
         {
             if (change.Affects(DataRequirements))
-                _dirty = true;
+                MarkDirty();
         }
 
         internal void DisposeRenderer()
@@ -243,7 +247,6 @@ namespace STS2RitsuMetrics.Ui
             _state.Parameters = new(parameters, StringComparer.Ordinal);
             _rendererDisposed = false;
             _rendererError = null;
-            _refreshDelay = 0d;
             _error.Visible = false;
             _body.RemoveChild(previousView);
             previousRenderer.Dispose();
@@ -555,8 +558,6 @@ namespace STS2RitsuMetrics.Ui
             if (MathF.Abs(_opacityReveal - target) <= OpacityTransitionSnapDistance)
                 _opacityReveal = target;
             ApplyOpacityVisuals();
-            MarkDirty();
-            _refreshDelay = Math.Min(_refreshDelay, OpacityTransitionStyleInterval);
         }
 
         private void ApplyOpacityVisuals()
@@ -595,7 +596,8 @@ namespace STS2RitsuMetrics.Ui
             var title = Presentation?.Title ??
                         ModLocalization.Get(_definition.TitleLocalizationKey, _definition.FallbackTitle);
             var subtitle = Presentation?.Subtitle ?? ScopeName(_state.Scope);
-            _title.Text = title;
+            if (!string.Equals(_title.Text, title, StringComparison.Ordinal))
+                _title.Text = title;
             switch (_renderer)
             {
                 case DashboardRendererBase builtInRenderer:
@@ -606,7 +608,9 @@ namespace STS2RitsuMetrics.Ui
                     break;
             }
 
-            _accent.Color = DashboardRendererBase.ColorOf(Presentation?.AccentColor ?? AccentForDashboard(style));
+            var accent = DashboardRendererBase.ColorOf(Presentation?.AccentColor ?? AccentForDashboard(style));
+            if (_accent.Color != accent)
+                _accent.Color = accent;
         }
 
         private string AccentForDashboard(DashboardStyleDefinition style)
@@ -650,6 +654,15 @@ namespace STS2RitsuMetrics.Ui
             _state.IsCollapsed = !_state.IsCollapsed;
             Save();
             ApplyGlobalSettings(false);
+            _host.DashboardConsumersChanged();
+        }
+
+        private void ScheduleRender()
+        {
+            if (_renderScheduled || !IsInsideTree())
+                return;
+            _renderScheduled = true;
+            Callable.From(RenderIfNeeded).CallDeferred();
         }
 
         internal void ToggleLock()
@@ -682,6 +695,7 @@ namespace STS2RitsuMetrics.Ui
             if (key == "metric_id")
                 RebuildDashboardSelector();
             MarkDirty();
+            _host.DashboardConsumersChanged();
         }
 
         private void RebuildDashboardSelector()
