@@ -135,16 +135,19 @@ namespace STS2RitsuMetrics.Ui
     {
         internal const string NodeName = "RitsuMetricsImmediateTooltip";
         private const float Gap = 9f;
+        private const float TooltipWidth = 320f;
         private readonly Label _body;
         private readonly List<(Control Owner, string Text)> _hovered = [];
         private readonly Label _title;
+        private int _showRevision;
 
         internal DashboardTooltipCard()
         {
             Visible = false;
             ZIndex = 900;
             MouseFilter = MouseFilterEnum.Ignore;
-            CustomMinimumSize = new(210f, 0f);
+            CustomMinimumSize = new(TooltipWidth, 0f);
+            Size = new(TooltipWidth, 1f);
             AddThemeStyleboxOverride("panel", TooltipStyle());
             var content = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
             content.AddThemeConstantOverride("separation", 3);
@@ -188,6 +191,7 @@ namespace STS2RitsuMetrics.Ui
                                        !item.Owner.IsVisibleInTree());
             if (_hovered.Count == 0)
             {
+                _showRevision++;
                 Hide();
                 return;
             }
@@ -197,8 +201,22 @@ namespace STS2RitsuMetrics.Ui
             _title.Text = lines[0];
             _body.Text = lines.Length > 1 ? lines[1] : string.Empty;
             _body.Visible = _body.Text.Length > 0;
-            ResetSize();
-            Size = GetCombinedMinimumSize();
+            Size = new(TooltipWidth, 1f);
+            _title.UpdateMinimumSize();
+            _body.UpdateMinimumSize();
+            UpdateMinimumSize();
+            var revision = ++_showRevision;
+            Callable.From(() => FinishShow(owner, text, revision)).CallDeferred();
+        }
+
+        private void FinishShow(Control owner, string text, int revision)
+        {
+            if (revision != _showRevision || _hovered.Count == 0 ||
+                !ReferenceEquals(_hovered[^1].Owner, owner) ||
+                !string.Equals(_hovered[^1].Text, text, StringComparison.Ordinal) ||
+                !IsInstanceValid(owner) || !owner.IsInsideTree() || !owner.IsVisibleInTree())
+                return;
+            Size = new(TooltipWidth, Math.Max(1f, GetCombinedMinimumSize().Y));
             PositionNextTo(owner);
             Show();
         }

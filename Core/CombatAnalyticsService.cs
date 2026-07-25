@@ -817,7 +817,10 @@ namespace STS2RitsuMetrics.Core
             var source = cause?.Source ?? (damageCardSource != null
                 ? GameDescriptorFactory.Card(damageCardSource)
                 : GameDescriptorFactory.CreatureSource(damageDealer));
-            var directDealer = GameDescriptorFactory.Player(damageDealer);
+            var directDealer = ResolveDirectDamagePlayer(
+                GameDescriptorFactory.Player(damageDealer),
+                damageCardSource == null ? null : GameDescriptorFactory.Player(damageCardSource.Owner),
+                GameDescriptorFactory.ModelOwner(cause?.Model));
             var dealerEntity = GameDescriptorFactory.CreatureOrNull(damageDealer);
 
             var receiver = GameDescriptorFactory.Creature(damageReceiver);
@@ -925,6 +928,18 @@ namespace STS2RitsuMetrics.Core
                 if (calculation != null && role == DamageContributionRole.Modifier)
                     RecordModifierMetric(damageReceiver, calculation, contribution, receiver, tags);
             }
+        }
+
+        internal static EntityDescriptor? ResolveDirectDamagePlayer(
+            EntityDescriptor? actorOwner,
+            EntityDescriptor? cardOwner,
+            EntityDescriptor? causalOwner)
+        {
+            if (actorOwner?.Kind == AnalyticsEntityKind.Player)
+                return actorOwner;
+            if (cardOwner?.Kind == AnalyticsEntityKind.Player)
+                return cardOwner;
+            return causalOwner?.Kind == AnalyticsEntityKind.Player ? causalOwner : null;
         }
 
         private void RecordOffensiveContributions(
@@ -1277,10 +1292,16 @@ namespace STS2RitsuMetrics.Core
         {
             if (effectiveAmount <= 0m)
                 return [];
-            if (model is PowerModel power && _powerCredits.TryGetValue(power, out var exact))
-                return exact.Shares(effectiveAmount, AttributionConfidence.Exact);
-            if (directPlayer?.Kind == AnalyticsEntityKind.Player)
-                return [new(directPlayer, source, 1m, effectiveAmount, AttributionConfidence.Exact)];
+            var trackedPowerShares = model is PowerModel power && _powerCredits.TryGetValue(power, out var exact)
+                ? exact.Shares(effectiveAmount, AttributionConfidence.Exact)
+                : [];
+            var primaryShares = ResolvePrimaryAttributionShares(
+                trackedPowerShares,
+                directPlayer,
+                source,
+                effectiveAmount);
+            if (primaryShares.Length > 0)
+                return primaryShares;
             if (!props.HasFlag(ValueProp.Unpowered))
                 return [];
             var candidates = receiver.Powers
@@ -1292,6 +1313,19 @@ namespace STS2RitsuMetrics.Core
                 return _powerCredits[poison].Shares(effectiveAmount, AttributionConfidence.Derived);
             return candidates.Length == 1
                 ? _powerCredits[candidates[0]].Shares(effectiveAmount, AttributionConfidence.Heuristic)
+                : [];
+        }
+
+        internal static DamageAttributionShare[] ResolvePrimaryAttributionShares(
+            DamageAttributionShare[] trackedPowerShares,
+            EntityDescriptor? directPlayer,
+            SourceDescriptor source,
+            decimal effectiveAmount)
+        {
+            if (trackedPowerShares.Length > 0)
+                return trackedPowerShares;
+            return directPlayer?.Kind == AnalyticsEntityKind.Player && effectiveAmount > 0m
+                ? [new(directPlayer, source, 1m, effectiveAmount, AttributionConfidence.Exact)]
                 : [];
         }
 

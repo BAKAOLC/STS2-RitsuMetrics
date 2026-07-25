@@ -1388,7 +1388,28 @@ namespace STS2RitsuMetrics.Ui
             var components = DashboardDataComponents.Metrics;
             if (DashboardPresentation.SplitSummons(parameters))
                 components |= DashboardDataComponents.Events;
-            return new(components, [metricId]);
+            return new(components, RequiredMetricIds(metricId));
+        }
+
+        internal static IReadOnlyCollection<string> RequiredMetricIds(string metricId)
+        {
+            return metricId switch
+            {
+                MetricIds.DamageContribution =>
+                    [MetricIds.DamageContribution, MetricIds.DamageDealt],
+                MetricIds.EffectiveHpDamageDealt =>
+                    [MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt],
+                MetricIds.EffectiveHpDamageContribution =>
+                    [MetricIds.EffectiveHpDamageContribution, MetricIds.DamageDealt],
+                MetricIds.DefenseContribution =>
+                [
+                    MetricIds.DefenseContribution,
+                    MetricIds.DamageMitigated,
+                    MetricIds.DamageBlocked,
+                    MetricIds.HealingReceived,
+                ],
+                _ => [metricId],
+            };
         }
 
         protected override void Render(DashboardRenderContext context)
