@@ -45,13 +45,12 @@ namespace STS2RitsuMetrics.Domain
             var chunks = new T[_sealedChunks.Count + (_activeCount == 0 ? 0 : 1)][];
             for (var index = 0; index < _sealedChunks.Count; index++)
                 chunks[index] = _sealedChunks[index];
-            if (_activeCount > 0)
-            {
-                var active = new T[_activeCount];
-                Array.Copy(_activeChunk, active, _activeCount);
-                chunks[^1] = active;
-            }
+            if (_activeCount == 0)
+                return _snapshot = new(chunks, Count);
 
+            var active = new T[_activeCount];
+            Array.Copy(_activeChunk, active, _activeCount);
+            chunks[^1] = active;
             return _snapshot = new(chunks, Count);
         }
 
@@ -64,8 +63,7 @@ namespace STS2RitsuMetrics.Domain
                 get
                 {
                     ArgumentOutOfRangeException.ThrowIfNegative(index);
-                    if (index >= Count)
-                        throw new ArgumentOutOfRangeException(nameof(index));
+                    ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Count);
                     return chunks[index / ChunkSize][index % ChunkSize];
                 }
             }

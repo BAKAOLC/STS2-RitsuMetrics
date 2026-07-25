@@ -413,12 +413,12 @@ namespace STS2RitsuMetrics.Ui
         }
 
         private static VirtualListRange VariableRange(
-            IReadOnlyList<float> offsets,
+            float[] offsets,
             float scrollOffset,
             float viewportHeight,
             float overscan)
         {
-            var itemCount = offsets.Count - 1;
+            var itemCount = offsets.Length - 1;
             if (itemCount <= 0)
                 return new(0, 0);
             var viewport = viewportHeight > 0f ? viewportHeight : 480f;
@@ -429,10 +429,10 @@ namespace STS2RitsuMetrics.Ui
             return new(start, end);
         }
 
-        private static int UpperBound(IReadOnlyList<float> values, float target)
+        private static int UpperBound(float[] values, float target)
         {
             var low = 0;
-            var high = values.Count;
+            var high = values.Length;
             while (low < high)
             {
                 var middle = low + (high - low) / 2;
@@ -1932,6 +1932,7 @@ namespace STS2RitsuMetrics.Ui
                 events.Add(timelineEvent);
             }
 
+            // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator
             foreach (var timelineEvent in events)
             {
                 var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style),

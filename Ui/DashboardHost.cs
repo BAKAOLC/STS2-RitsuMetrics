@@ -886,16 +886,17 @@ namespace STS2RitsuMetrics.Ui
             var showFloatingDashboards = settings.OverlayEnabled && runManager.IsInProgress &&
                                          (hasLiveCombat || hasCompletedCombat);
             var becameVisible = false;
+            // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var window in _windows.Values)
-                if (window.Visible != showFloatingDashboards)
-                {
-                    window.Visible = showFloatingDashboards;
-                    if (showFloatingDashboards)
-                    {
-                        becameVisible = true;
-                        window.MarkDirty();
-                    }
-                }
+            {
+                if (window.Visible == showFloatingDashboards)
+                    continue;
+                window.Visible = showFloatingDashboards;
+                if (!showFloatingDashboards)
+                    continue;
+                becameVisible = true;
+                window.MarkDirty();
+            }
 
             if (becameVisible)
                 DashboardConsumersChanged();

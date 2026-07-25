@@ -30,8 +30,7 @@ namespace STS2RitsuMetrics.Core
             get
             {
                 ArgumentOutOfRangeException.ThrowIfNegative(index);
-                if (index >= Count)
-                    throw new ArgumentOutOfRangeException(nameof(index));
+                ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Count);
                 var segmentIndex = Array.BinarySearch(_ends, index + 1);
                 if (segmentIndex < 0)
                     segmentIndex = ~segmentIndex;
@@ -42,6 +41,7 @@ namespace STS2RitsuMetrics.Core
 
         public IEnumerator<T> GetEnumerator()
         {
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var segment in _segments)
             foreach (var item in segment)
                 yield return item;
@@ -58,7 +58,7 @@ namespace STS2RitsuMetrics.Core
                 .ToArray();
             return materialized.Length switch
             {
-                0 => Array.Empty<T>(),
+                0 => [],
                 1 => materialized[0],
                 _ => new CompositeReadOnlyList<T>(materialized),
             };
