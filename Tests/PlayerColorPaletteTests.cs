@@ -129,6 +129,48 @@ namespace STS2RitsuMetrics.Tests
             Assert.Same(first, second);
         }
 
+        [Fact]
+        public void PersistedIdentityColorOverridesLiveCharacterColor()
+        {
+            var color = PlayerColorPalette.Resolve(
+                [new("player", 1, "SILENT", "E05050FF")],
+                Style,
+                _ => new("7FFF00FF"))["player"];
+
+            Assert.InRange(HueDistance(new Color(color).H, new Color("E05050FF").H), 0f, 0.01f);
+        }
+
+        [Fact]
+        public void PersistedDuplicateVariantsAreNotVariedAgain()
+        {
+            PlayerColorIdentity first = new("player-a", 10, "IRONCLAD", "FF5555FF");
+            PlayerColorIdentity second = new("player-b", 20, "IRONCLAD", "E64E5AFF");
+
+            var together = Resolve([first, second]);
+            var firstOnly = Resolve([first]);
+            var secondOnly = Resolve([second]);
+
+            Assert.Equal(firstOnly[first.PlayerKey], together[first.PlayerKey]);
+            Assert.Equal(secondOnly[second.PlayerKey], together[second.PlayerKey]);
+        }
+
+        [Fact]
+        public void PaletteCacheInvalidatesWhenPersistedColorChanges()
+        {
+            var cache = new PlayerColorPaletteCache();
+            var first = cache.Resolve(
+                [new("player", 1, "IRONCLAD", "FF5555FF")],
+                Style,
+                ResolveCharacterColor);
+            var second = cache.Resolve(
+                [new("player", 1, "IRONCLAD", "55AAFFFF")],
+                Style,
+                ResolveCharacterColor);
+
+            Assert.NotSame(first, second);
+            Assert.NotEqual(first["player"], second["player"]);
+        }
+
         private static IReadOnlyDictionary<string, string> Resolve(IEnumerable<PlayerColorIdentity> players)
         {
             return PlayerColorPalette.Resolve(players, Style, ResolveCharacterColor);

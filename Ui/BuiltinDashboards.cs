@@ -737,6 +737,28 @@ namespace STS2RitsuMetrics.Ui
             };
         }
 
+        protected static IReadOnlyDictionary<string, string> PlayerAccents(
+            IEnumerable<PlayerMetricSnapshot> players,
+            DashboardStyleDefinition style)
+        {
+            return PlayerColorPalette.Resolve(
+                players.Select(player => new PlayerColorIdentity(
+                    player.PlayerKey,
+                    player.PlayerNetId,
+                    player.CharacterId,
+                    player.IdentityColor)),
+                style,
+                CharacterPortraitCache.GetNameColor);
+        }
+
+        protected static void ApplyIdentityColor(Label label, string color)
+        {
+            label.AddThemeColorOverride("font_color", ColorOf(color));
+            label.AddThemeColorOverride("font_outline_color",
+                ColorOf(PlayerColorPalette.ReadableTextOutline(color)));
+            label.AddThemeConstantOverride("outline_size", 2);
+        }
+
         protected static IReadOnlyList<SourceMetricSnapshot> MetricSourcesForDisplay(
             PlayerMetricSnapshot player,
             string id)
@@ -987,7 +1009,9 @@ namespace STS2RitsuMetrics.Ui
                 ClipContents = true,
             };
             identity.AddThemeConstantOverride("separation", -2);
-            identity.AddChild(TruncatedLabel(player.DisplayName, style, false, style.FontSize + 2));
+            var playerName = TruncatedLabel(player.DisplayName, style, false, style.FontSize + 2);
+            ApplyIdentityColor(playerName, accent);
+            identity.AddChild(playerName);
             identity.AddChild(TruncatedLabel(player.CharacterId, style, true, Math.Max(9, style.FontSize - 2)));
             row.AddChild(identity);
             var valueStack = new VBoxContainer { CustomMinimumSize = new(74, 0) };
@@ -1079,6 +1103,7 @@ namespace STS2RitsuMetrics.Ui
 
             var name = TruncatedLabel(player.DisplayName, style, false, style.FontSize + 1);
             name.VerticalAlignment = VerticalAlignment.Center;
+            ApplyIdentityColor(name, accent);
             header.AddChild(name);
 
             var amount = Label(Format(value), style, false, style.FontSize + 3);
@@ -1395,7 +1420,8 @@ namespace STS2RitsuMetrics.Ui
                 values.Select(entry => new PlayerColorIdentity(
                     entry.Player.PlayerKey,
                     entry.Player.PlayerNetId,
-                    entry.Player.CharacterId)),
+                    entry.Player.CharacterId,
+                    entry.Player.IdentityColor)),
                 context.Style,
                 CharacterPortraitCache.GetNameColor);
             var total = values.Sum(item => item.Value);
@@ -1911,6 +1937,7 @@ namespace STS2RitsuMetrics.Ui
                 .PlayerHpLost);
             var ranked = snapshot.Players.OrderByDescending(item =>
                 SnapshotStatistics.Survival(snapshot, item.PlayerNetId).PlayerHpLost).ToArray();
+            var playerAccents = PlayerAccents(ranked, context.Style);
             var rows = new List<VariableReconciledRow>(ranked.Length + 201);
             for (var index = 0; index < ranked.Length; index++)
             {
@@ -1918,7 +1945,7 @@ namespace STS2RitsuMetrics.Ui
                 var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var taken = survival.PlayerHpLost;
                 var blocked = Metric(player, MetricIds.DamageBlocked);
-                var accent = Accent(context.Style, index);
+                var accent = playerAccents[player.PlayerKey];
                 var rank = index + 1;
                 var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style), player.PlayerKey,
                     rank, taken, totalTaken, blocked, survival, accent,

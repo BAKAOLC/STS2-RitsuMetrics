@@ -86,10 +86,11 @@ namespace STS2RitsuMetrics.Ui
             bool singleLine)
         {
             var grid = ResponsiveGrid(2, 320f);
+            var playerAccents = PlayerAccents(players, style);
             for (var index = 0; index < players.Length; index++)
             {
                 var player = players[index];
-                var accent = Accent(style, index);
+                var accent = playerAccents[player.PlayerKey];
                 var damage = Metric(player, MetricIds.DamageDealt);
                 var energy = Metric(player, MetricIds.EnergySpent);
                 var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
@@ -134,6 +135,7 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style)
         {
             var title = ModLocalization.Get(definition.LocalizationKey, definition.FallbackName);
+            var playerAccents = PlayerAccents(players, style);
             var body = ChartBody(title, style, Accent(style, definition.AccentIndex));
             var table = new GridContainer
             {
@@ -153,17 +155,20 @@ namespace STS2RitsuMetrics.Ui
             }
 
             foreach (var player in players)
-                AddMetricRow(player.DisplayName, metricId => Value(player, metricId), false);
+                AddMetricRow(player.DisplayName, metricId => Value(player, metricId), false,
+                    playerAccents[player.PlayerKey]);
             if (players.Length > 1)
                 AddMetricRow(ModLocalization.Get("overview.teamTotal", "Team total"),
-                    metricId => players.Sum(player => Value(player, metricId)), true);
+                    metricId => players.Sum(player => Value(player, metricId)), true, null);
             body.AddChild(table);
             return Surface(body, style, Accent(style, definition.AccentIndex));
 
-            void AddMetricRow(string name, Func<string, decimal> value, bool total)
+            void AddMetricRow(string name, Func<string, decimal> value, bool total, string? identityColor)
             {
                 var playerName = TruncatedLabel(name, style, !total, style.FontSize);
                 playerName.TooltipText = name;
+                if (identityColor != null)
+                    ApplyIdentityColor(playerName, identityColor);
                 table.AddChild(playerName);
                 foreach (var metricId in definition.Metrics)
                 {

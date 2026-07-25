@@ -87,6 +87,7 @@ namespace STS2RitsuMetrics.Ui
 
             var totalDamage = snapshot.Players.Sum(player => Metric(player, MetricIds.DamageDealt));
             var players = snapshot.Players.OrderByDescending(player => Metric(player, MetricIds.DamageDealt)).ToArray();
+            var playerAccents = PlayerAccents(players, context.Style);
             for (var index = 0; index < players.Length; index++)
             {
                 var player = players[index];
@@ -95,7 +96,7 @@ namespace STS2RitsuMetrics.Ui
                 var energy = Metric(player, MetricIds.EnergySpent);
                 var cards = Metric(player, MetricIds.CardsPlayed);
                 var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
-                var accent = Accent(context.Style, index);
+                var accent = playerAccents[player.PlayerKey];
                 var content = new VBoxContainer();
                 content.AddThemeConstantOverride("separation", 6);
                 content.AddChild(PlayerHeader(player, index + 1, damage, totalDamage, accent, context.Style,
@@ -209,10 +210,10 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
-            foreach (var (player, index) in snapshot.Players
+            var playerAccents = PlayerAccents(snapshot.Players, context.Style);
+            foreach (var player in snapshot.Players
                          .OrderByDescending(player => SnapshotStatistics.Survival(snapshot, player.PlayerNetId)
-                             .PlayerHpLost)
-                         .Select((player, index) => (player, index)))
+                             .PlayerHpLost))
             {
                 var (taken, deaths, summonHpLost, summonDeaths) =
                     SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
@@ -220,7 +221,7 @@ namespace STS2RitsuMetrics.Ui
                 var gained = Metric(player, MetricIds.BlockGained);
                 var energy = Metric(player, MetricIds.EnergySpent);
                 var cards = Metric(player, MetricIds.CardsPlayed);
-                var accent = Accent(context.Style, index);
+                var accent = playerAccents[player.PlayerKey];
                 var content = new VBoxContainer();
                 content.AddThemeConstantOverride("separation", 5);
                 content.AddChild(PlayerHeader(player, 0, taken, taken + blocked, accent, context.Style,
@@ -268,9 +269,10 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
+            var playerAccents = PlayerAccents(snapshot.Players, context.Style);
             foreach (var player in snapshot.Players)
             {
-                AddSection(player.DisplayName, Accent(context.Style, Rows.GetChildCount()), context.Style);
+                AddSection(player.DisplayName, playerAccents[player.PlayerKey], context.Style);
                 var sourceRows = AggregatePlayerSources(player).ToArray();
                 var cards = sourceRows.Where(source => source.Kind == AnalyticsSourceKind.Card)
                     .OrderByDescending(SourceScore).ToArray();

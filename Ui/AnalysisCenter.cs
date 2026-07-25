@@ -14,6 +14,13 @@ namespace STS2RitsuMetrics.Ui
         private const double SearchDelaySeconds = 0.18d;
         private const int SearchResultLimit = 120;
 
+        private static readonly DashboardStyleDefinition HistoryPlayerStyle = new()
+        {
+            Id = "ritsumetrics.analysis-history",
+            Name = "Analysis history",
+            SurfaceColor = "0C141FFF",
+        };
+
         private readonly Dictionary<(string RunId, string CombatId), string> _combatSearchText = [];
         private readonly HashSet<string> _expandedRunIds = new(StringComparer.Ordinal);
 
@@ -494,6 +501,7 @@ namespace STS2RitsuMetrics.Ui
                     hash.Add(player.PlayerKey, StringComparer.Ordinal);
                     hash.Add(player.DisplayName, StringComparer.CurrentCulture);
                     hash.Add(player.CharacterId, StringComparer.Ordinal);
+                    hash.Add(player.IdentityColor, StringComparer.Ordinal);
                 }
             }
 
@@ -502,9 +510,7 @@ namespace STS2RitsuMetrics.Ui
 
         private static string RunPlayers(RunSnapshot run)
         {
-            var players = run.Combats.SelectMany(combat => combat.Players)
-                .GroupBy(player => player.PlayerKey, StringComparer.Ordinal)
-                .Select(group => group.Last())
+            var players = RunPlayerSnapshots(run)
                 .Select(player => string.IsNullOrWhiteSpace(player.DisplayName)
                     ? player.CharacterId
                     : player.DisplayName)
@@ -514,6 +520,32 @@ namespace STS2RitsuMetrics.Ui
             return players.Length == 0
                 ? ModLocalization.Get("analysis.unknownPlayers", "Unknown party")
                 : string.Join(" / ", players);
+        }
+
+        private static PlayerMetricSnapshot[] RunPlayerSnapshots(RunSnapshot run)
+        {
+            return run.Combats.SelectMany(combat => combat.Players)
+                .GroupBy(player => player.PlayerKey, StringComparer.Ordinal)
+                .Select(group => group.LastOrDefault(player =>
+                                     !string.IsNullOrWhiteSpace(player.IdentityColor)) ??
+                                 group.Last())
+                .OrderBy(player => player.PlayerNetId.HasValue ? 0 : 1)
+                .ThenBy(player => player.PlayerNetId)
+                .ThenBy(player => player.PlayerKey, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static IReadOnlyDictionary<string, string> RunPlayerColors(
+            IReadOnlyList<PlayerMetricSnapshot> players)
+        {
+            return PlayerColorPalette.Resolve(
+                players.Select(player => new PlayerColorIdentity(
+                    player.PlayerKey,
+                    player.PlayerNetId,
+                    player.CharacterId,
+                    player.IdentityColor)),
+                HistoryPlayerStyle,
+                CharacterPortraitCache.GetNameColor);
         }
 
         private static string RunStatus(RunSnapshot run, bool active)

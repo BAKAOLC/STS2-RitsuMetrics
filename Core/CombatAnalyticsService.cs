@@ -360,6 +360,13 @@ namespace STS2RitsuMetrics.Core
                 };
             }
 
+            var identityColors = PlayerIdentityColor.Assign(evt.RunState.Players);
+            foreach (var player in evt.RunState.Players)
+            {
+                var descriptor = GameDescriptorFactory.Player(player);
+                combat.InitializePlayer(descriptor, identityColors.GetValueOrDefault(descriptor.Key) ?? string.Empty);
+            }
+
             _pendingRestoredCombat = null;
             TimelineCapturePatches.ConsumeSkippedOriginalDiagnostics();
             combat.UpdateRoundCount(evt.CombatState?.RoundNumber ?? 0);

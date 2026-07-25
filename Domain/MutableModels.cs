@@ -300,6 +300,22 @@ namespace STS2RitsuMetrics.Domain
             }
         }
 
+        internal void InitializePlayer(EntityDescriptor player, string identityColor)
+        {
+            lock (_gate)
+            {
+                if (_players.TryGetValue(player.Key, out var existing))
+                {
+                    if (existing.EnsureIdentityColor(identityColor))
+                        _metadataRevision++;
+                    return;
+                }
+
+                _players.Add(player.Key, new(player, identityColor));
+                _metadataRevision++;
+            }
+        }
+
         public void AddTimeline(CombatTimelineEvent timelineEvent, int maxEvents)
         {
             lock (_gate)
@@ -436,7 +452,7 @@ namespace STS2RitsuMetrics.Domain
 
     internal readonly record struct CaptureBufferDiagnostics(int DroppedObservations, int DroppedTimelineEvents);
 
-    internal sealed class MutablePlayerMetrics(EntityDescriptor player)
+    internal sealed class MutablePlayerMetrics(EntityDescriptor player, string identityColor = "")
     {
         private readonly Dictionary<string, CachedPlayerSnapshot> _cachedSnapshots = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _metricRevisions = new(StringComparer.Ordinal);
@@ -445,6 +461,7 @@ namespace STS2RitsuMetrics.Domain
             new(StringComparer.Ordinal);
 
         private readonly Dictionary<string, decimal> _totals = new(StringComparer.Ordinal);
+        private string _identityColor = identityColor;
         private long _revision;
 
         public static MutablePlayerMetrics Restore(PlayerMetricSnapshot snapshot)
@@ -455,7 +472,7 @@ namespace STS2RitsuMetrics.Domain
                 snapshot.PlayerNetId,
                 snapshot.CharacterId,
                 snapshot.DisplayName,
-                snapshot.CharacterId));
+                snapshot.CharacterId), snapshot.IdentityColor);
             foreach (var (metricId, value) in snapshot.Totals)
                 metrics._totals[metricId] = value;
             foreach (var (metricId, sources) in snapshot.Sources)
@@ -467,6 +484,16 @@ namespace STS2RitsuMetrics.Domain
             }
 
             return metrics;
+        }
+
+        internal bool EnsureIdentityColor(string value)
+        {
+            if (!string.IsNullOrWhiteSpace(_identityColor) || string.IsNullOrWhiteSpace(value))
+                return false;
+            _identityColor = value;
+            _revision++;
+            _cachedSnapshots.Clear();
+            return true;
         }
 
         public void Add(MetricObservation observation)
@@ -529,7 +556,8 @@ namespace STS2RitsuMetrics.Domain
                 player.DisplayName,
                 player.CharacterId,
                 new ReadOnlyDictionary<string, decimal>(totals),
-                sources);
+                sources,
+                _identityColor);
             if (_cachedSnapshots.Count >= 16)
                 _cachedSnapshots.Clear();
             _cachedSnapshots[selectionKey] = new(revision, snapshot);

@@ -8,7 +8,8 @@ namespace STS2RitsuMetrics.Ui
     internal readonly record struct PlayerColorIdentity(
         string PlayerKey,
         ulong? PlayerNetId,
-        string CharacterId);
+        string CharacterId,
+        string IdentityColor = "");
 
     internal sealed class PlayerColorPaletteCache
     {
@@ -81,8 +82,13 @@ namespace STS2RitsuMetrics.Ui
                     .ToArray();
                 var baseColor = ResolveBaseColor(ordered[0], style, characterColor);
                 for (var index = 0; index < ordered.Length; index++)
-                    resolved.Add(ordered[index].PlayerKey,
-                        Encode(ToneAccent(baseColor, Parse(style.SurfaceColor, Colors.Black), index)));
+                {
+                    var player = ordered[index];
+                    var hasStoredColor = TryParse(player.IdentityColor, out var storedColor);
+                    resolved.Add(player.PlayerKey,
+                        Encode(ToneAccent(hasStoredColor ? storedColor : baseColor,
+                            Parse(style.SurfaceColor, Colors.Black), hasStoredColor ? 0 : index)));
+                }
             }
 
             return resolved;
@@ -229,6 +235,26 @@ namespace STS2RitsuMetrics.Ui
             catch
             {
                 return fallback;
+            }
+        }
+
+        private static bool TryParse(string value, out Color color)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                color = default;
+                return false;
+            }
+
+            try
+            {
+                color = new(value);
+                return true;
+            }
+            catch
+            {
+                color = default;
+                return false;
             }
         }
 

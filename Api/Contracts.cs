@@ -110,7 +110,8 @@ namespace STS2RitsuMetrics.Api
         string DisplayName,
         string CharacterId,
         IReadOnlyDictionary<string, decimal> Totals,
-        IReadOnlyDictionary<string, IReadOnlyList<SourceMetricSnapshot>> Sources);
+        IReadOnlyDictionary<string, IReadOnlyList<SourceMetricSnapshot>> Sources,
+        string IdentityColor = "");
 
     public sealed record CombatSnapshot(
         string RunId,

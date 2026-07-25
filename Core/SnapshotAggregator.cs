@@ -53,9 +53,13 @@ namespace STS2RitsuMetrics.Core
                 new(StringComparer.Ordinal);
 
             private readonly Dictionary<string, decimal> _totals = new(StringComparer.Ordinal);
+            private string _identityColor = first.IdentityColor;
 
             internal void Add(PlayerMetricSnapshot player)
             {
+                if (string.IsNullOrWhiteSpace(_identityColor) &&
+                    !string.IsNullOrWhiteSpace(player.IdentityColor))
+                    _identityColor = player.IdentityColor;
                 foreach (var total in player.Totals)
                     _totals[total.Key] = _totals.GetValueOrDefault(total.Key) + total.Value;
                 AddFallbackTotal(MetricIds.DamageContribution, MetricIds.DamageDealt);
@@ -124,6 +128,7 @@ namespace STS2RitsuMetrics.Core
                 {
                     Totals = new Dictionary<string, decimal>(_totals, StringComparer.Ordinal),
                     Sources = sources,
+                    IdentityColor = _identityColor,
                 };
             }
         }

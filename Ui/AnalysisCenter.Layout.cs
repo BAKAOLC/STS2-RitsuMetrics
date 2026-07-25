@@ -348,16 +348,41 @@ namespace STS2RitsuMetrics.Ui
                 MouseFilter = MouseFilterEnum.Ignore,
             };
             identity.AddThemeConstantOverride("separation", -4);
-            var title = new Label
+            var title = new HBoxContainer
             {
-                Text = ModLocalization.Format("analysis.runTitle", "{0:yyyy-MM-dd HH:mm} · {1}",
-                    run.StartedAtUtc.ToLocalTime(), RunPlayers(run)),
-                ClipText = true,
-                TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                ClipContents = true,
                 MouseFilter = MouseFilterEnum.Ignore,
             };
-            title.AddThemeFontSizeOverride("font_size", DashboardControlTheme.BodyFontSize);
-            title.AddThemeColorOverride("font_color", new("E6EDF7FF"));
+            title.AddThemeConstantOverride("separation", 4);
+            var date = new Label
+            {
+                Text = $"{run.StartedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm} ·",
+                MouseFilter = MouseFilterEnum.Ignore,
+            };
+            date.AddThemeFontSizeOverride("font_size", DashboardControlTheme.BodyFontSize);
+            date.AddThemeColorOverride("font_color", new("E6EDF7FF"));
+            title.AddChild(date);
+            var players = RunPlayerSnapshots(run);
+            var playerColors = RunPlayerColors(players);
+            if (players.Length == 0)
+                title.AddChild(HistoryPlayerLabel(
+                    ModLocalization.Get("analysis.unknownPlayers", "Unknown party"),
+                    "AEBBD1FF"));
+            else
+                for (var index = 0; index < players.Length; index++)
+                {
+                    var player = players[index];
+                    if (index > 0)
+                        title.AddChild(HistoryPlayerLabel("/", "8295ACFF"));
+                    title.AddChild(HistoryPlayerLabel(
+                        string.IsNullOrWhiteSpace(player.DisplayName)
+                            ? player.CharacterId
+                            : player.DisplayName,
+                        playerColors[player.PlayerKey],
+                        true));
+                }
+
             identity.AddChild(title);
             var highestFloor = run.Combats.Count == 0 ? 0 : run.Combats.Max(combat => combat.Floor);
             var summary = new Label
@@ -373,6 +398,24 @@ namespace STS2RitsuMetrics.Ui
             identity.AddChild(summary);
             row.AddChild(identity);
             return button;
+        }
+
+        private static Label HistoryPlayerLabel(string text, string color, bool clip = false)
+        {
+            var label = new Label
+            {
+                Text = text,
+                ClipText = clip,
+                TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
+                SizeFlagsHorizontal = clip ? SizeFlags.ExpandFill : SizeFlags.ShrinkBegin,
+                MouseFilter = MouseFilterEnum.Ignore,
+            };
+            label.AddThemeFontSizeOverride("font_size", DashboardControlTheme.BodyFontSize);
+            label.AddThemeColorOverride("font_color", new(color));
+            label.AddThemeColorOverride("font_outline_color",
+                new(PlayerColorPalette.ReadableTextOutline(color)));
+            label.AddThemeConstantOverride("outline_size", 2);
+            return label;
         }
 
         private static Button HistoryCombatButton(CombatSnapshot combat, int number, bool selected)
