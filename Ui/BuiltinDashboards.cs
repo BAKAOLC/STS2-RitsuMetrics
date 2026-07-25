@@ -821,7 +821,9 @@ namespace STS2RitsuMetrics.Ui
                 CornerRadiusBottomLeft = 4,
                 CornerRadiusBottomRight = 4,
             });
+            bar.AddChild(MeterTextBackdrop(style));
             var label = Label(text, style);
+            ApplyMeterTextReadability(label, style);
             label.MouseFilter = Control.MouseFilterEnum.Ignore;
             label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
             label.ClipText = true;
@@ -833,6 +835,17 @@ namespace STS2RitsuMetrics.Ui
             bar.AddChild(label);
             DashboardTooltip.SetValue(bar, text, value, maximum);
             return bar;
+        }
+
+        private static ColorRect MeterTextBackdrop(DashboardStyleDefinition style)
+        {
+            return new()
+            {
+                Color = ColorOf(PlayerColorPalette.ReadableTextBackdrop(style.TextColor)),
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+                LayoutMode = 1,
+                AnchorsPreset = (int)Control.LayoutPreset.FullRect,
+            };
         }
 
         protected static Control Meter(
@@ -854,9 +867,11 @@ namespace STS2RitsuMetrics.Ui
                 OffsetRight = -9f,
             };
             var name = TruncatedLabel(labelText, style);
+            ApplyMeterTextReadability(name, style);
             name.MouseFilter = Control.MouseFilterEnum.Ignore;
             labels.AddChild(name);
             var amount = Label(valueText, style, false, style.FontSize + 1);
+            ApplyMeterTextReadability(amount, style);
             amount.MouseFilter = Control.MouseFilterEnum.Ignore;
             amount.CustomMinimumSize = new(72, 0);
             amount.HorizontalAlignment = HorizontalAlignment.Right;
@@ -864,6 +879,15 @@ namespace STS2RitsuMetrics.Ui
             bar.AddChild(labels);
             DashboardTooltip.SetValue(bar, labelText, value, maximum, valueText);
             return bar;
+        }
+
+        private static void ApplyMeterTextReadability(Label label, DashboardStyleDefinition style)
+        {
+            label.Modulate = Colors.White;
+            label.AddThemeColorOverride("font_color", ColorOf(style.TextColor));
+            label.AddThemeColorOverride("font_outline_color",
+                ColorOf(PlayerColorPalette.ReadableTextOutline(style.TextColor)));
+            label.AddThemeConstantOverride("outline_size", 2);
         }
 
         protected static Control Surface(
@@ -1324,6 +1348,7 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class MetricMeterRenderer(string? fixedMetricId = null) : DashboardRendererBase
     {
+        private readonly PlayerColorPaletteCache _playerColorCache = new();
         private DashboardRenderContext? _lastContext;
         private string? _selectedPlayerKey;
 
@@ -1366,6 +1391,13 @@ namespace STS2RitsuMetrics.Ui
             }
 
             var values = BuildMeterEntries(snapshot, metricId, DashboardPresentation.SplitSummons(context.Parameters));
+            var playerAccents = _playerColorCache.Resolve(
+                values.Select(entry => new PlayerColorIdentity(
+                    entry.Player.PlayerKey,
+                    entry.Player.PlayerNetId,
+                    entry.Player.CharacterId)),
+                context.Style,
+                CharacterPortraitCache.GetNameColor);
             var total = values.Sum(item => item.Value);
             Subtitle = $"{ScopeName(context.Scope)}  ·  " +
                        $"{ModLocalization.Format("overlay.rounds", "{0} rounds", snapshot.RoundCount)}  ·  " +
@@ -1378,27 +1410,29 @@ namespace STS2RitsuMetrics.Ui
                 : values.FirstOrDefault(item => item.Player.PlayerKey == _selectedPlayerKey);
             if (selected != null)
             {
-                RenderPlayerDetail(context, metricId, selected.Player, selected.Value, total);
+                RenderPlayerDetail(context, metricId, selected.Player, selected.Value, total,
+                    playerAccents[selected.Player.PlayerKey]);
                 return;
             }
 
             _selectedPlayerKey = null;
-            RenderRanking(context, values, total);
+            RenderRanking(context, values, total, playerAccents);
             Status.Text = snapshot.EncounterName;
         }
 
         private void RenderRanking(
             DashboardRenderContext context,
             MeterEntry[] values,
-            decimal total)
+            decimal total,
+            IReadOnlyDictionary<string, string> playerAccents)
         {
             var maximum = Math.Max(1m, values.Select(item => item.Value).DefaultIfEmpty().Max());
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
             ReconcileRows(values.Select((entry, index) =>
             {
                 var (player, value) = entry;
-                var accent = Accent(context.Style, index);
-                var fingerprint = string.Join("\u001e", MeterStyleFingerprint(context), index, player.DisplayName,
+                var accent = playerAccents[player.PlayerKey];
+                var fingerprint = string.Join("\u001e", MeterStyleFingerprint(context), player.DisplayName,
                     player.CharacterId, accent);
                 return new ReconciledRow(
                     $"player:{player.PlayerKey}",
@@ -1441,14 +1475,15 @@ namespace STS2RitsuMetrics.Ui
             string metricId,
             PlayerMetricSnapshot player,
             decimal value,
-            decimal total)
+            decimal total,
+            string accent)
         {
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
             var rows = new List<ReconciledRow>
             {
                 new("detail:header",
                     string.Join("\u001e", MeterStyleFingerprint(context), player.PlayerKey, player.DisplayName, value,
-                        total, singleLine),
+                        total, singleLine, accent),
                     () =>
                     {
                         var backText = ModLocalization.Get("dashboard.backToRanking", "Team ranking");
@@ -1469,7 +1504,7 @@ namespace STS2RitsuMetrics.Ui
                             _selectedPlayerKey = null;
                             RefreshLast();
                         };
-                        var playerHeader = PlayerHeader(player, 0, value, total, Accent(context.Style, 0),
+                        var playerHeader = PlayerHeader(player, 0, value, total, accent,
                             context.Style, singleLine);
                         if (!singleLine)
                         {
@@ -1488,8 +1523,6 @@ namespace STS2RitsuMetrics.Ui
                         return detailHeader;
                     }),
             };
-            var accent = Accent(context.Style, 0);
-
             if (!player.Sources.TryGetValue(metricId, out var sources) || sources.Count == 0)
             {
                 rows.Add(new("detail:no-source", MeterStyleFingerprint(context),
@@ -2873,6 +2906,11 @@ namespace STS2RitsuMetrics.Ui
             return GodotObject.IsInstanceValid(fallback) ? fallback : null;
         }
 
+        internal static Color? GetNameColor(string characterId)
+        {
+            return GetModel(characterId)?.NameColor;
+        }
+
         internal static void Invalidate(string characterId)
         {
             Models.Remove(characterId);
@@ -2890,6 +2928,17 @@ namespace STS2RitsuMetrics.Ui
                 Main.Logger.Warn($"Could not resolve character portrait '{characterId}': {exception.Message}");
                 return null;
             }
+        }
+
+        private static CharacterModel? GetModel(string characterId)
+        {
+            if (string.IsNullOrWhiteSpace(characterId))
+                return null;
+            if (Models.TryGetValue(characterId, out var model))
+                return model;
+            model = Resolve(characterId);
+            Models[characterId] = model;
+            return model;
         }
     }
 }
