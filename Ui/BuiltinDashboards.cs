@@ -809,7 +809,7 @@ namespace STS2RitsuMetrics.Ui
             return Accent(style, index);
         }
 
-        protected static Control Meter(
+        protected static ProgressBar Meter(
             string text,
             decimal value,
             decimal maximum,
@@ -879,6 +879,18 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style,
             int? height = null)
         {
+            return CreateLabeledMeter(labelText, valueText, value, maximum, color, style, height).Root;
+        }
+
+        private static LabeledMeter CreateLabeledMeter(
+            string labelText,
+            string valueText,
+            decimal value,
+            decimal maximum,
+            string color,
+            DashboardStyleDefinition style,
+            int? height = null)
+        {
             var bar = Meter(string.Empty, value, maximum, color, style, height);
             var labels = new HBoxContainer
             {
@@ -900,7 +912,7 @@ namespace STS2RitsuMetrics.Ui
             labels.AddChild(amount);
             bar.AddChild(labels);
             DashboardTooltip.SetValue(bar, labelText, value, maximum, valueText);
-            return bar;
+            return new(bar, name, amount);
         }
 
         private static void ApplyMeterTextReadability(Label label, DashboardStyleDefinition style)
@@ -1180,18 +1192,19 @@ namespace STS2RitsuMetrics.Ui
 
             var portraitSize = Math.Clamp(rowHeight - 4, 24, 30);
             row.AddChild(PlayerPortrait(player, portraitSize, style.FontSize + 1, accent, style));
-            var valueText = showPercentages && total > 0m
-                ? $"{Format(value)}  ·  {value / total:P1}"
-                : Format(value);
-            var meter = Meter(player.DisplayName, valueText, value, maximum, accent, style, rowHeight);
-            meter.Name = "MetricMeterProgress";
-            if (meter.GetChild(1) is HBoxContainer labels && labels.GetChildCount() >= 2)
-            {
-                labels.GetChild<Label>(0).Name = "MetricMeterName";
-                labels.GetChild<Label>(1).Name = "MetricMeterValue";
-            }
-
-            row.AddChild(meter);
+            var valueText = SingleLineValueText(value, total, showPercentages);
+            var meter = CreateLabeledMeter(
+                player.DisplayName,
+                valueText,
+                value,
+                maximum,
+                accent,
+                style,
+                rowHeight);
+            meter.Root.Name = "MetricMeterProgress";
+            meter.Name.Name = "MetricMeterName";
+            meter.Value.Name = "MetricMeterValue";
+            row.AddChild(meter.Root);
             return row;
         }
 
@@ -1224,9 +1237,7 @@ namespace STS2RitsuMetrics.Ui
             if (content.FindChild("MetricMeterValue", true, false) is Label amount)
             {
                 var text = singleLine
-                    ? showPercentages && total > 0m
-                        ? $"{Format(value)}  ·  {value / total:P1}"
-                        : Format(value)
+                    ? SingleLineValueText(value, total, showPercentages)
                     : Format(value);
                 if (!string.Equals(amount.Text, text, StringComparison.Ordinal))
                     amount.Text = text;
@@ -1241,6 +1252,13 @@ namespace STS2RitsuMetrics.Ui
                 share.Text = shareText;
             if (share.Visible != showPercentages)
                 share.Visible = showPercentages;
+        }
+
+        internal static string SingleLineValueText(decimal value, decimal total, bool showPercentages)
+        {
+            return showPercentages && total > 0m
+                ? $"{Format(value)}  ·  {value / total:P1}"
+                : Format(value);
         }
 
         private static string PlayerMonogram(string displayName)
@@ -1347,6 +1365,8 @@ namespace STS2RitsuMetrics.Ui
             Action<Control>? Update = null);
 
         protected sealed record VariableReconciledRow(ReconciledRow Row, float EstimatedHeight);
+
+        private sealed record LabeledMeter(ProgressBar Root, Label Name, Label Value);
 
         private readonly record struct ReconciledRowState(string Fingerprint, Control Control);
 
