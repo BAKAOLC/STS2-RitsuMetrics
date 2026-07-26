@@ -21,10 +21,22 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class AdvancedDashboardRenderer(AdvancedDashboardMode mode) : DashboardRendererBase
     {
+        protected override bool ReconcileRowsOnRefresh => mode is AdvancedDashboardMode.SourceAnalysis or
+            AdvancedDashboardMode.CardsAndEffects or AdvancedDashboardMode.ContributionAnalysis;
+
         public override DashboardDataRequirements GetDataRequirements(
             DashboardDataScope scope,
             IReadOnlyDictionary<string, string> parameters)
         {
+            if (mode == AdvancedDashboardMode.SourceAnalysis)
+                return new(DashboardDataComponents.Metrics,
+                [
+                    MetricIds.DamageDealt,
+                    MetricIds.DamageContribution,
+                    MetricIds.DamageAmplified,
+                    MetricIds.Overkill,
+                ]);
+
             var components = mode switch
             {
                 AdvancedDashboardMode.ContributionAnalysis => DashboardDataComponents.Metrics |
@@ -137,36 +149,23 @@ namespace STS2RitsuMetrics.Ui
             var snapshot = context.Snapshot;
             if (snapshot == null)
             {
-                Empty(context);
+                ReconcileAdvancedEmpty(context);
                 return;
             }
 
-            var sources = AggregateSources(snapshot.Players, true)
+            var allSources = AggregateSources(snapshot.Players, true)
                 .Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m ||
                                  SourceMetric(source, MetricIds.DamageContribution) > 0m)
                 .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution))
                 .ThenByDescending(source => SourceMetric(source, MetricIds.DamageDealt))
-                .Take(250).ToArray();
-            if (sources.Length == 0)
+                .ToArray();
+            if (allSources.Length == 0)
             {
-                Empty(context, ModLocalization.Get("analysis.noSources", "No source data"));
+                ReconcileAdvancedEmpty(context, ModLocalization.Get("analysis.noSources", "No source data"));
                 return;
             }
 
-            var charts = ResponsiveGrid(2, 280f);
-            charts.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources.ad", "Top AD sources"),
-                sources.Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m)
-                    .OrderByDescending(source => SourceMetric(source, MetricIds.DamageDealt)).Take(12)
-                    .Select(source => new DashboardBarDatum(source.Name,
-                        SourceMetric(source, MetricIds.DamageDealt), SourceColor(source.Kind, context.Style),
-                        Format(SourceMetric(source, MetricIds.DamageDealt)))), context.Style));
-            charts.AddChild(BarChartPanel(ModLocalization.Get("overview.topSources.rd", "Top RD sources"),
-                sources.Where(source => SourceMetric(source, MetricIds.DamageContribution) > 0m)
-                    .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution)).Take(12)
-                    .Select(source => new DashboardBarDatum(source.Name,
-                        SourceMetric(source, MetricIds.DamageContribution), SourceColor(source.Kind, context.Style),
-                        Format(SourceMetric(source, MetricIds.DamageContribution)))), context.Style));
-            Rows.AddChild(charts);
+            var sources = PageItems(allSources, context, 40);
             var offenseMetrics = new[]
             {
                 MetricIds.DamageDealt,
@@ -174,31 +173,86 @@ namespace STS2RitsuMetrics.Ui
                 MetricIds.DamageAmplified,
                 MetricIds.Overkill,
             };
-            var maximum = Math.Max(1m, sources.SelectMany(source => offenseMetrics.Select(metricId =>
+            var adTitle = ModLocalization.Get("overview.topSources.ad", "Top AD sources");
+            var rdTitle = ModLocalization.Get("overview.topSources.rd", "Top RD sources");
+            var adChartData = allSources.Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageDealt)).Take(12)
+                .Select(source => new DashboardBarDatum(source.Name,
+                    SourceMetric(source, MetricIds.DamageDealt), SourceColor(source.Kind, context.Style),
+                    Format(SourceMetric(source, MetricIds.DamageDealt)))).ToArray();
+            var rdChartData = allSources.Where(source => SourceMetric(source, MetricIds.DamageContribution) > 0m)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution)).Take(12)
+                .Select(source => new DashboardBarDatum(source.Name,
+                    SourceMetric(source, MetricIds.DamageContribution), SourceColor(source.Kind, context.Style),
+                    Format(SourceMetric(source, MetricIds.DamageContribution)))).ToArray();
+            var rows = new List<VariableReconciledRow>(sources.Count + 2);
+            var chartFingerprint = string.Join('\u001e',
+                VisualStyleFingerprint(context.Style),
+                adTitle,
+                rdTitle,
+                string.Join('\u001d', adChartData),
+                string.Join('\u001d', rdChartData));
+            rows.Add(new(new("__source_charts", chartFingerprint, () =>
+            {
+                var charts = ResponsiveGrid(2, 280f);
+                charts.AddChild(BarChartPanel(adTitle, adChartData, context.Style));
+                charts.AddChild(BarChartPanel(rdTitle, rdChartData, context.Style));
+                return charts;
+            }), 680f));
+            var maximum = Math.Max(1m, allSources.SelectMany(source => offenseMetrics.Select(metricId =>
                 Math.Abs(SourceMetric(source, metricId)))).DefaultIfEmpty().Max());
-            AddSection(ModLocalization.Get("analysis.sourceDetails", "Source details"), Accent(context.Style, 1),
-                context.Style, true);
+            var sectionTitle = ModLocalization.Get("analysis.sourceDetails", "Source details");
+            var sectionColor = Accent(context.Style, 1);
+            rows.Add(new(new("__source_details", string.Join('\u001e',
+                    VisualStyleFingerprint(context.Style), sectionTitle, sectionColor),
+                () => CreateSection(sectionTitle, sectionColor, context.Style, true)), 24f));
+            // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var source in sources)
             {
                 var color = SourceColor(source.Kind, context.Style);
-                var content = new VBoxContainer();
-                content.AddThemeConstantOverride("separation", 4);
-                content.AddChild(SourceHeader(source, color, context.Style));
                 var metrics = offenseMetrics.Select(metricId => (MetricId: metricId,
                         Value: SourceMetric(source, metricId)))
                     .Where(metric => metric.Value != 0m).ToArray();
-                foreach (var (metricId, value) in metrics)
-                    content.AddChild(Meter(MetricName(metricId),
-                        $"{Format(value)}  ·  ×{source.Occurrences.GetValueOrDefault(metricId)}",
-                        Math.Abs(value), maximum, MetricColor(metricId, context.Style), context.Style,
-                        Math.Max(23, context.Style.RowHeight - 7)));
-                Rows.AddChild(Surface(content, context.Style, color));
+                var fingerprint = string.Join('\u001e',
+                    VisualStyleFingerprint(context.Style),
+                    source.Key,
+                    source.Kind,
+                    source.Name,
+                    source.Players.Count,
+                    color,
+                    maximum,
+                    string.Join('\u001d', metrics.Select(metric =>
+                        $"{metric.MetricId}\u001c{MetricName(metric.MetricId)}\u001c{metric.Value}\u001c" +
+                        $"{source.Occurrences.GetValueOrDefault(metric.MetricId)}")));
+                rows.Add(new(new($"source:{source.Key}", fingerprint, () =>
+                {
+                    var content = new VBoxContainer();
+                    content.AddThemeConstantOverride("separation", 4);
+                    content.AddChild(SourceHeader(source, color, context.Style));
+                    // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator
+                    foreach (var (metricId, value) in metrics)
+                        content.AddChild(Meter(MetricName(metricId),
+                            $"{Format(value)}  ·  ×{source.Occurrences.GetValueOrDefault(metricId)}",
+                            Math.Abs(value), maximum, MetricColor(metricId, context.Style), context.Style,
+                            Math.Max(23, context.Style.RowHeight - 7)));
+                    return Surface(content, context.Style, color);
+                }), 46f + metrics.Length * (Math.Max(23, context.Style.RowHeight - 7) + 4f)));
             }
 
+            ReconcileRows(rows.Select(row => row.Row));
             Status.Text = ModLocalization.Format("analysis.sourceSummary",
-                "{0} sources · {1} players · AD {2} · RD {3}", sources.Length, snapshot.Players.Count,
+                "{0} sources · {1} players · AD {2} · RD {3}", allSources.Length, snapshot.Players.Count,
                 Format(snapshot.Players.Sum(player => MetricForDisplay(player, MetricIds.DamageDealt))),
                 Format(snapshot.Players.Sum(player => MetricForDisplay(player, MetricIds.DamageContribution))));
+        }
+
+        private void ReconcileAdvancedEmpty(DashboardRenderContext context, string text = "No combat data")
+        {
+            ReconcileRows(
+            [
+                new("__empty", EmptyRowFingerprint(context, text), () => CreateEmptyRow(context, text)),
+            ]);
+            Status.Text = string.Empty;
         }
 
         private void RenderDefense(DashboardRenderContext context)
@@ -265,29 +319,41 @@ namespace STS2RitsuMetrics.Ui
             var snapshot = context.Snapshot;
             if (snapshot == null)
             {
-                Empty(context);
+                ReconcileAdvancedEmpty(context);
                 return;
             }
 
             var playerAccents = PlayerAccents(snapshot.Players, context.Style);
+            var rows = new List<VariableReconciledRow>();
             foreach (var player in snapshot.Players)
             {
-                AddSection(player.DisplayName, playerAccents[player.PlayerKey], context.Style);
+                var playerColor = playerAccents[player.PlayerKey];
+                rows.Add(new(new($"player:{player.PlayerKey}", string.Join('\u001e',
+                        VisualStyleFingerprint(context.Style), player.DisplayName, playerColor),
+                    () => CreateSection(player.DisplayName, playerColor, context.Style)), 31f));
                 var sourceRows = AggregatePlayerSources(player).ToArray();
                 var cards = sourceRows.Where(source => source.Kind == AnalyticsSourceKind.Card)
                     .OrderByDescending(SourceScore).ToArray();
-                foreach (var card in cards)
-                    Rows.AddChild(CardEffectRow(card, true, context.Style));
+                rows.AddRange(cards.Select(card =>
+                    CardEffectVirtualRow(player.PlayerKey, card, true, context.Style)));
                 var effects = sourceRows.Where(source => source.Kind != AnalyticsSourceKind.Card)
                     .Where(source => SourceScore(source) > 0m)
-                    .OrderByDescending(SourceScore).Take(40).ToArray();
+                    .OrderByDescending(SourceScore).ToArray();
                 if (effects.Length > 0)
-                    AddSection(ModLocalization.Get("analysis.nonCardEffects", "Powers, relics and effects"),
-                        Accent(context.Style, 4), context.Style, true);
-                foreach (var effect in effects)
-                    Rows.AddChild(CardEffectRow(effect, false, context.Style));
+                {
+                    var sectionTitle = ModLocalization.Get("analysis.nonCardEffects", "Powers, relics and effects");
+                    var sectionColor = Accent(context.Style, 4);
+                    rows.Add(new(new($"effects:{player.PlayerKey}", string.Join('\u001e',
+                            VisualStyleFingerprint(context.Style), sectionTitle, sectionColor),
+                        () => CreateSection(sectionTitle, sectionColor, context.Style, true)), 24f));
+                }
+
+                rows.AddRange(effects.Select(effect =>
+                    CardEffectVirtualRow(player.PlayerKey, effect, false, context.Style)));
             }
 
+            var visibleRows = PageItems(rows, context, 42);
+            ReconcileRows(visibleRows.Select(row => row.Row));
             Status.Text = ModLocalization.Format("analysis.cardEffectSummary",
                 "Card and effect drill-down · {0} players",
                 snapshot.Players.Count);
@@ -298,7 +364,7 @@ namespace STS2RitsuMetrics.Ui
             var snapshot = context.Snapshot;
             if (snapshot == null)
             {
-                Empty(context);
+                ReconcileAdvancedEmpty(context);
                 return;
             }
 
@@ -328,45 +394,33 @@ namespace STS2RitsuMetrics.Ui
                     rollup.Confidence = parsed;
             }
 
-            var ranked = contributions.Values.OrderByDescending(item => item.Total).Take(200).ToArray();
+            var ranked = contributions.Values.OrderByDescending(item => item.Total).ToArray();
             if (ranked.Length == 0)
             {
-                Empty(context, ModLocalization.Get("analysis.noModifierContributions",
+                ReconcileAdvancedEmpty(context, ModLocalization.Get("analysis.noModifierContributions",
                     "No attributed RD amplification or execution data"));
                 return;
             }
 
-            Rows.AddChild(BarChartPanel(ModLocalization.Get("dashboard.contributionAnalysis",
-                "Contribution analysis"), ranked.Take(12).Select(rollup => new DashboardBarDatum(
+            var chartTitle = ModLocalization.Get("dashboard.contributionAnalysis", "Contribution analysis");
+            var chartData = ranked.Take(12).Select(rollup => new DashboardBarDatum(
                 $"{rollup.Contributor.DisplayName} · {rollup.Source.DisplayName}", rollup.Total,
-                SourceColor(rollup.Source.Kind, context.Style), Format(rollup.Total))), context.Style));
-            AddSection(ModLocalization.Get("analysis.contributionDetails", "Contribution details"),
-                Accent(context.Style, 4), context.Style, true);
-            foreach (var rollup in ranked)
+                SourceColor(rollup.Source.Kind, context.Style), Format(rollup.Total))).ToArray();
+            var rows = new List<VariableReconciledRow>(22)
             {
-                var color = SourceColor(rollup.Source.Kind, context.Style);
-                var box = new VBoxContainer();
-                box.AddThemeConstantOverride("separation", 4);
-                var header = new HBoxContainer();
-                header.AddChild(Badge(rollup.Source.Kind.ToString().ToUpperInvariant(), color, context.Style, 78));
-                header.AddChild(TruncatedLabel(rollup.Source.DisplayName, context.Style, false,
-                    context.Style.FontSize + 1));
-                header.AddChild(Label(ModLocalization.Format("analysis.attributedPlayer", "→ {0}",
-                    rollup.Contributor.DisplayName), context.Style, true));
-                header.AddChild(Label($"×{rollup.Events}", context.Style, true));
-                box.AddChild(header);
-                box.AddChild(MetricGrid(context.Style,
-                [
-                    Stat("analysis.enabledContribution", "Enabled", rollup.Enabled, Accent(context.Style, 4)),
-                    Stat("analysis.executionContribution", "Execution", rollup.Execution,
-                        context.Style.WarningColor),
-                    new(ModLocalization.Get("analysis.confidence", "Confidence"),
-                        DashboardLocalization.AttributionConfidence(rollup.Confidence), 0m,
-                        color),
-                ]));
-                Rows.AddChild(Surface(box, context.Style, color));
-            }
+                new(new("__contribution_chart", string.Join('\u001e',
+                        VisualStyleFingerprint(context.Style), chartTitle, string.Join('\u001d', chartData)),
+                    () => BarChartPanel(chartTitle, chartData, context.Style)), 340f),
+            };
+            var sectionTitle = ModLocalization.Get("analysis.contributionDetails", "Contribution details");
+            var sectionColor = Accent(context.Style, 4);
+            rows.Add(new(new("__contribution_details", string.Join('\u001e',
+                    VisualStyleFingerprint(context.Style), sectionTitle, sectionColor),
+                () => CreateSection(sectionTitle, sectionColor, context.Style, true)), 24f));
+            var detailRows = ranked.Select(rollup => ContributionVirtualRow(rollup, context.Style)).ToArray();
+            rows.AddRange(PageItems(detailRows, context, 40));
 
+            ReconcileRows(rows.Select(row => row.Row));
             Status.Text = ModLocalization.Format("analysis.contributionSummary",
                 "{0} RD modifier observations · {1} attributed sources", observations.Length, contributions.Count);
         }
@@ -631,6 +685,25 @@ namespace STS2RitsuMetrics.Ui
                     source.Value, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
         }
 
+        private static VariableReconciledRow CardEffectVirtualRow(
+            string playerKey,
+            SourceRollup source,
+            bool card,
+            DashboardStyleDefinition style)
+        {
+            var fingerprint = string.Join('\u001e',
+                VisualStyleFingerprint(style),
+                playerKey,
+                source.Key,
+                source.Kind,
+                source.Name,
+                card,
+                string.Join('\u001d', source.Totals.OrderBy(item => item.Key, StringComparer.Ordinal)),
+                string.Join('\u001d', source.Occurrences.OrderBy(item => item.Key, StringComparer.Ordinal)));
+            return new(new($"{(card ? "card" : "effect")}:{playerKey}:{source.Key}", fingerprint,
+                () => CardEffectRow(source, card, style)), 142f);
+        }
+
         private static Control CardEffectRow(SourceRollup source, bool card, DashboardStyleDefinition style)
         {
             var color = SourceColor(source.Kind, style);
@@ -663,6 +736,52 @@ namespace STS2RitsuMetrics.Ui
             return Surface(box, style, color);
         }
 
+        private static Control ContributionRow(
+            ContributionRollup rollup,
+            string color,
+            DashboardStyleDefinition style)
+        {
+            var box = new VBoxContainer();
+            box.AddThemeConstantOverride("separation", 4);
+            var header = new HBoxContainer();
+            header.AddChild(Badge(rollup.Source.Kind.ToString().ToUpperInvariant(), color, style, 78));
+            header.AddChild(TruncatedLabel(rollup.Source.DisplayName, style, false, style.FontSize + 1));
+            header.AddChild(Label(ModLocalization.Format("analysis.attributedPlayer", "→ {0}",
+                rollup.Contributor.DisplayName), style, true));
+            header.AddChild(Label($"×{rollup.Events}", style, true));
+            box.AddChild(header);
+            box.AddChild(MetricGrid(style,
+            [
+                Stat("analysis.enabledContribution", "Enabled", rollup.Enabled, Accent(style, 4)),
+                Stat("analysis.executionContribution", "Execution", rollup.Execution, style.WarningColor),
+                new(ModLocalization.Get("analysis.confidence", "Confidence"),
+                    DashboardLocalization.AttributionConfidence(rollup.Confidence), 0m,
+                    color),
+            ]));
+            return Surface(box, style, color);
+        }
+
+        private static VariableReconciledRow ContributionVirtualRow(
+            ContributionRollup rollup,
+            DashboardStyleDefinition style)
+        {
+            var color = SourceColor(rollup.Source.Kind, style);
+            var fingerprint = string.Join('\u001e',
+                VisualStyleFingerprint(style),
+                rollup.Contributor.Key,
+                rollup.Contributor.DisplayName,
+                rollup.Source.Key,
+                rollup.Source.DisplayName,
+                rollup.Source.Kind,
+                rollup.Events,
+                rollup.Enabled,
+                rollup.Execution,
+                rollup.Confidence,
+                color);
+            return new(new($"contribution:{rollup.Contributor.Key}:{rollup.Source.Key}", fingerprint,
+                () => ContributionRow(rollup, color, style)), 118f);
+        }
+
         private static HBoxContainer SourceHeader(SourceRollup source, string color,
             DashboardStyleDefinition style)
         {
@@ -677,6 +796,15 @@ namespace STS2RitsuMetrics.Ui
 
         private void AddSection(string title, string color, DashboardStyleDefinition style, bool compact = false)
         {
+            Rows.AddChild(CreateSection(title, color, style, compact));
+        }
+
+        private static HBoxContainer CreateSection(
+            string title,
+            string color,
+            DashboardStyleDefinition style,
+            bool compact = false)
+        {
             var row = new HBoxContainer { CustomMinimumSize = new(0, compact ? 24 : 31) };
             row.AddThemeConstantOverride("separation", 7);
             row.AddChild(new ColorRect { Color = ColorOf(color), CustomMinimumSize = new(4, compact ? 18 : 25) });
@@ -684,7 +812,7 @@ namespace STS2RitsuMetrics.Ui
                 compact ? Math.Max(10, style.FontSize - 1) : style.FontSize + 1);
             label.Modulate = ColorOf(color);
             row.AddChild(label);
-            Rows.AddChild(row);
+            return row;
         }
 
         private static GridContainer MetricGrid(DashboardStyleDefinition style, IReadOnlyList<StatCell> cells)

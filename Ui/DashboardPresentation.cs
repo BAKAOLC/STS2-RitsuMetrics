@@ -8,6 +8,8 @@ namespace STS2RitsuMetrics.Ui
 {
     internal static class DashboardPresentation
     {
+        internal const string HostParameter = "__ritsumetrics_host";
+        internal const string AnalysisCenterHost = "analysis_center";
         private const int MinimumFontSize = 12;
         private const int MaximumFontSize = 24;
 
@@ -61,6 +63,21 @@ namespace STS2RitsuMetrics.Ui
         {
             return parameters.GetValueOrDefault(DashboardParameterIds.SummonDisplay) ==
                    DashboardParameterValues.SplitSummons;
+        }
+
+        internal static int HistoryItemLimit(
+            IReadOnlyDictionary<string, string> parameters,
+            int floatingWindowLimit)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(floatingWindowLimit);
+            return ShowsCompleteHistory(parameters)
+                ? int.MaxValue
+                : floatingWindowLimit;
+        }
+
+        internal static bool ShowsCompleteHistory(IReadOnlyDictionary<string, string> parameters)
+        {
+            return parameters.GetValueOrDefault(HostParameter) == AnalysisCenterHost;
         }
 
         internal static float WindowOpacity(

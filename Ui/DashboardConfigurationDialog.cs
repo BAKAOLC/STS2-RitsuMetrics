@@ -40,10 +40,11 @@ namespace STS2RitsuMetrics.Ui
         private readonly DashboardDropdown _scope;
         private readonly Button _submit;
         private readonly Control _summonField;
-        private readonly DashboardDropdown _summons;
 
         private readonly string[] _summonValues =
             [DashboardParameterValues.MergeSummons, DashboardParameterValues.SplitSummons];
+
+        private readonly DashboardDropdown _summons;
 
         private readonly Label _title;
         private readonly DashboardPercentageSlider _windowOpacity;
@@ -194,7 +195,7 @@ namespace STS2RitsuMetrics.Ui
             _dashboardIds = definitions.Select(item => item.Id).ToArray();
             _dashboard.Clear();
             foreach (var definition in definitions)
-                _dashboard.AddItem(ModLocalization.Get(definition.TitleLocalizationKey, definition.FallbackTitle));
+                _dashboard.AddLocalizedItem(definition.TitleLocalizationKey, definition.FallbackTitle);
             Select(_dashboard, _dashboardIds, selectedDashboard ?? BuiltInDashboardIds.Meter);
 
             var selectedMetric = Selected(_metric, _metricIds);
@@ -206,7 +207,7 @@ namespace STS2RitsuMetrics.Ui
             _metricIds = metrics.Select(item => item.Id).ToArray();
             _metric.Clear();
             foreach (var metric in metrics)
-                _metric.AddItem(ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName));
+                _metric.AddLocalizedItem(metric.NameLocalizationKey, metric.FallbackName);
             Select(_metric, _metricIds, selectedMetric ?? MetricIds.DamageContribution);
             UpdateSelectedDashboard();
         }

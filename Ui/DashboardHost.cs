@@ -76,6 +76,7 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Ready()
         {
+            ModLocalization.SynchronizeCurrentLanguage();
             Layer = ControlSurfaceLayer;
             _windowLayer = new() { Layer = FloatingWindowLayer };
             AddChild(_windowLayer);

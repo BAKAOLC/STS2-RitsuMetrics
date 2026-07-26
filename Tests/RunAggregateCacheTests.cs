@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Collections;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
 using STS2RitsuMetrics.Domain;
@@ -99,6 +100,36 @@ namespace STS2RitsuMetrics.Tests
             Assert.Equal([completedEvent, activeEvent], result.Events);
         }
 
+        [Fact]
+        public void CompletedTimelineIsNotEnumeratedWhileBuildingRunAggregate()
+        {
+            var cache = new RunAggregateCache();
+            var completedTimeline = new EnumerationTrackingList<CombatTimelineEvent>([TimelineEvent(1)]);
+            var completed = Combat("completed", true, 10m, 2) with { Timeline = completedTimeline };
+            var active = Combat("active", false, 3m, 1) with { Timeline = [TimelineEvent(2)] };
+
+            var result = cache.Combine(Run(completed, active),
+                DashboardDataComponents.Metrics | DashboardDataComponents.Timeline,
+                null, "*", true);
+
+            Assert.Equal(0, completedTimeline.EnumerationCount);
+            Assert.IsType<CompositeReadOnlyList<CombatTimelineEvent>>(result!.Timeline);
+        }
+
+        [Fact]
+        public void ResetReloadsReplacedCompletedRunData()
+        {
+            var cache = new RunAggregateCache();
+            _ = cache.Combine(Run(Combat("completed", true, 10m, 2)),
+                DashboardDataComponents.All, null, "*", true);
+
+            cache.Reset();
+            var replaced = cache.Combine(Run(Combat("completed", true, 25m, 2)),
+                DashboardDataComponents.All, null, "*", true);
+
+            Assert.Equal(25m, Total(replaced));
+        }
+
         private static decimal Total(CombatSnapshot? snapshot)
         {
             return snapshot!.Players.Single().Totals["damage"];
@@ -141,6 +172,50 @@ namespace STS2RitsuMetrics.Tests
             return new(sequence, "run", "combat", 0, 1, 1, DateTimeOffset.UnixEpoch, "damage", sequence,
                 player, null, new(sourceKey, AnalyticsSourceKind.Card, sourceKey, sourceKey),
                 MetricObservation.EmptyTags);
+        }
+
+        private static CombatTimelineEvent TimelineEvent(long sequence)
+        {
+            return new(
+                sequence,
+                $"event-{sequence}",
+                null,
+                "run",
+                "combat",
+                DateTimeOffset.UnixEpoch.AddSeconds(sequence),
+                1,
+                1,
+                TimelineTurnSide.Player,
+                false,
+                CombatTimelineKind.Damage,
+                TimelineEventPhase.Completed,
+                "damage",
+                "damage",
+                null,
+                null,
+                null,
+                sequence,
+                MetricObservation.EmptyTags);
+        }
+
+        private sealed class EnumerationTrackingList<T>(IReadOnlyList<T> items) : IReadOnlyList<T>
+        {
+            internal int EnumerationCount { get; private set; }
+
+            public int Count => items.Count;
+
+            public T this[int index] => items[index];
+
+            public IEnumerator<T> GetEnumerator()
+            {
+                EnumerationCount++;
+                return items.GetEnumerator();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator()
+            {
+                return GetEnumerator();
+            }
         }
     }
 }

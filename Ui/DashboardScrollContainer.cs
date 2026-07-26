@@ -9,6 +9,7 @@ namespace STS2RitsuMetrics.Ui
         private readonly MarginContainer _contentHost;
         private readonly VScrollBar _verticalScrollBar;
 
+        private int _appliedContentGutter = -1;
         private int _contentGutter = DefaultContentGutter;
         private bool _layoutRefreshPending;
         private bool _visibleRangeNotificationPending;
@@ -69,7 +70,10 @@ namespace STS2RitsuMetrics.Ui
 
         private void UpdateContentGutter()
         {
-            _contentHost.AddThemeConstantOverride("margin_right", _verticalScrollBar.Visible ? _contentGutter : 0);
+            if (_appliedContentGutter == _contentGutter)
+                return;
+            _appliedContentGutter = _contentGutter;
+            _contentHost.AddThemeConstantOverride("margin_right", _contentGutter);
         }
 
         private void RefreshContentLayout()

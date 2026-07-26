@@ -8,17 +8,20 @@ namespace STS2RitsuMetrics.Localization
 {
     internal static class ModLocalization
     {
-        private static readonly Lazy<I18N> InstanceFactory = new(() => new(
-            "STS2-RitsuMetrics",
-            resourceFolders: ["STS2RitsuMetrics.Localization"],
-            resourceAssembly: Assembly.GetExecutingAssembly()));
+        private static readonly Lazy<I18N> InstanceFactory = new(CreateInstance);
+        private static readonly LocalizationLanguageState LanguageState = new();
 
         internal static I18N Instance => InstanceFactory.Value;
+        private static event Action? ChangedHandlers;
 
         internal static event Action? Changed
         {
-            add => Instance.Changed += value;
-            remove => Instance.Changed -= value;
+            add
+            {
+                _ = Instance;
+                ChangedHandlers += value;
+            }
+            remove => ChangedHandlers -= value;
         }
 
         internal static string Get(string key, string fallback)
@@ -29,6 +32,31 @@ namespace STS2RitsuMetrics.Localization
         internal static string Format(string key, string fallback, params object[] args)
         {
             return string.Format(CultureInfo.CurrentCulture, Instance.Get(key, fallback), args);
+        }
+
+        internal static void SynchronizeCurrentLanguage()
+        {
+            var instance = Instance;
+            if (!LanguageState.SwitchTo(I18N.ResolveCurrentLanguageCode()))
+                return;
+            instance.ForceReload();
+        }
+
+        private static I18N CreateInstance()
+        {
+            var instance = new I18N(
+                "STS2-RitsuMetrics",
+                resourceFolders: ["STS2RitsuMetrics.Localization"],
+                resourceAssembly: Assembly.GetExecutingAssembly());
+            instance.Changed += OnInstanceChanged;
+            LanguageState.Record(I18N.ResolveCurrentLanguageCode());
+            return instance;
+        }
+
+        private static void OnInstanceChanged()
+        {
+            LanguageState.Record(I18N.ResolveCurrentLanguageCode());
+            ChangedHandlers?.Invoke();
         }
     }
 }

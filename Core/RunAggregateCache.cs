@@ -12,6 +12,15 @@ namespace STS2RitsuMetrics.Core
         private string _metricSelectionKey = string.Empty;
         private string _runId = string.Empty;
 
+        internal void Reset()
+        {
+            _completedAggregate = null;
+            _completedCombatIds = [];
+            _components = DashboardDataComponents.None;
+            _metricSelectionKey = string.Empty;
+            _runId = string.Empty;
+        }
+
         internal bool RequiresCompletedCombats(
             RunSnapshot run,
             DashboardDataComponents components,
@@ -44,14 +53,23 @@ namespace STS2RitsuMetrics.Core
                     var projectedCompleted = metricIds == null
                         ? completed
                         : completed.Select(combat => DashboardSnapshotProjector.Project(combat, metricIds)!).ToArray();
-                    if (!components.HasFlag(DashboardDataComponents.Events) ||
-                        !components.HasFlag(DashboardDataComponents.Timeline))
-                        projectedCompleted = projectedCompleted.Select(combat => combat with
+                    var metricAggregate = SnapshotAggregator.Combine(
+                        run with { Combats = projectedCompleted },
+                        false,
+                        false);
+                    _completedAggregate = metricAggregate == null
+                        ? null
+                        : metricAggregate with
                         {
-                            Events = components.HasFlag(DashboardDataComponents.Events) ? combat.Events : [],
-                            Timeline = components.HasFlag(DashboardDataComponents.Timeline) ? combat.Timeline : [],
-                        }).ToArray();
-                    _completedAggregate = SnapshotAggregator.Combine(run with { Combats = projectedCompleted });
+                            Events = components.HasFlag(DashboardDataComponents.Events)
+                                ? CompositeReadOnlyList<MetricObservation>.Create(
+                                    projectedCompleted.Select(combat => combat.Events))
+                                : [],
+                            Timeline = components.HasFlag(DashboardDataComponents.Timeline)
+                                ? CompositeReadOnlyList<CombatTimelineEvent>.Create(
+                                    projectedCompleted.Select(combat => combat.Timeline))
+                                : [],
+                        };
                 }
             }
 

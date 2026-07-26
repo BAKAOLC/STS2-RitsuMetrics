@@ -12,7 +12,6 @@ namespace STS2RitsuMetrics.Ui
     internal sealed partial class AnalysisCenter : PanelContainer
     {
         private const double SearchDelaySeconds = 0.18d;
-        private const int SearchResultLimit = 120;
 
         private static readonly DashboardStyleDefinition HistoryPlayerStyle = new()
         {
@@ -27,7 +26,10 @@ namespace STS2RitsuMetrics.Ui
         private readonly Dictionary<string, string> _parameters = new(StringComparer.Ordinal)
         {
             ["metric_id"] = MetricIds.DamageContribution,
+            [DashboardPresentation.HostParameter] = DashboardPresentation.AnalysisCenterHost,
         };
+
+        private readonly RunAggregateCache _selectedRunAggregateCache = new();
 
         private string? _activeRunId;
         private string[] _appliedSearchTerms = [];
@@ -206,7 +208,7 @@ namespace STS2RitsuMetrics.Ui
             _dashboardIds = definitions.Select(definition => definition.Id).ToArray();
             _dashboard.Clear();
             foreach (var definition in definitions)
-                _dashboard.AddItem(ModLocalization.Get(definition.TitleLocalizationKey, definition.FallbackTitle));
+                _dashboard.AddLocalizedItem(definition.TitleLocalizationKey, definition.FallbackTitle);
             Select(_dashboard, _dashboardIds, selectedDashboard);
 
             var selectedMetric = Selected(_metric, _metricIds) ?? MetricIds.DamageContribution;
@@ -218,7 +220,7 @@ namespace STS2RitsuMetrics.Ui
             _metricIds = metrics.Select(metric => metric.Id).ToArray();
             _metric.Clear();
             foreach (var metric in metrics)
-                _metric.AddItem(ModLocalization.Get(metric.NameLocalizationKey, metric.FallbackName));
+                _metric.AddLocalizedItem(metric.NameLocalizationKey, metric.FallbackName);
             Select(_metric, _metricIds, selectedMetric);
 
             _historyRevision++;
@@ -251,6 +253,7 @@ namespace STS2RitsuMetrics.Ui
             RebuildSearchIndex();
             EnsureSelection();
             _selectedRunData = null;
+            _selectedRunAggregateCache.Reset();
             _ = SelectedRun();
             _historyHash = 0;
             RefreshHistoryIfNeeded();
@@ -354,7 +357,6 @@ namespace STS2RitsuMetrics.Ui
             var search = _appliedSearchText;
             var visibleCombats = 0;
             var matchedRuns = 0;
-            var truncated = false;
             foreach (var run in _runs)
             {
                 var orderedCombats = run.Combats.OrderByDescending(combat => combat.StartedAtUtc).ToArray();
@@ -397,21 +399,12 @@ namespace STS2RitsuMetrics.Ui
                     .ToDictionary(item => item.CombatId, item => item.Number, StringComparer.Ordinal);
                 foreach (var combat in matchingCombats)
                 {
-                    if (search.Length > 0 && visibleCombats >= SearchResultLimit)
-                    {
-                        truncated = true;
-                        break;
-                    }
-
                     var combatButton = HistoryCombatButton(combat, chronological[combat.CombatId],
                         selectedRun && combat.CombatId == _selectedCombatId && _scope.Selected == 0);
                     combatButton.Pressed += () => SelectCombat(run.RunId, combat.CombatId);
                     groupRows.AddChild(combatButton);
                     visibleCombats++;
                 }
-
-                if (truncated)
-                    break;
             }
 
             if (_historyRows.GetChildCount() == 0)
@@ -424,11 +417,8 @@ namespace STS2RitsuMetrics.Ui
             _historySummary.Text = search.Length == 0
                 ? ModLocalization.Format("analysis.historySummary", "{0} runs · {1} combats", _runs.Length,
                     _runs.Sum(run => run.Combats.Count))
-                : truncated
-                    ? ModLocalization.Format("analysis.searchLimited",
-                        "{0}+ matches · refine the search to show more", visibleCombats)
-                    : ModLocalization.Format("analysis.searchSummary", "{0} runs · {1} matching combats",
-                        matchedRuns, visibleCombats);
+                : ModLocalization.Format("analysis.searchSummary", "{0} runs · {1} matching combats",
+                    matchedRuns, visibleCombats);
         }
 
         private bool MatchesSearch(CombatSnapshot combat, string search)
@@ -587,6 +577,7 @@ namespace STS2RitsuMetrics.Ui
             _selectedCombatId = run?.Combats.MaxBy(combat => combat.StartedAtUtc)?.CombatId;
             _scope.Select(1);
             _selectedRunData = null;
+            _selectedRunAggregateCache.Reset();
             _ = SelectedRun();
             _historyHash = 0;
             MarkDirty();
@@ -600,6 +591,7 @@ namespace STS2RitsuMetrics.Ui
             _expandedRunIds.Add(runId);
             _scope.Select(0);
             _selectedRunData = null;
+            _selectedRunAggregateCache.Reset();
             _ = SelectedRun();
             _historyHash = 0;
             MarkDirty();
@@ -778,7 +770,12 @@ namespace STS2RitsuMetrics.Ui
             if (run == null)
                 return null;
             if (_scope.Selected == 1)
-                return SnapshotAggregator.Combine(run) is { } combined
+                return _selectedRunAggregateCache.Combine(
+                    run,
+                    DashboardDataComponents.All,
+                    null,
+                    "*",
+                    true) is { } combined
                     ? combined with
                     {
                         EncounterName = ModLocalization.Get("analysis.runTotal", "Run total"),
