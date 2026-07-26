@@ -933,7 +933,12 @@ namespace STS2RitsuMetrics.Ui
             };
             bar.AddThemeStyleboxOverride("fill", new StyleBoxFlat
             {
-                BgColor = ColorOf(color) with { A = 0.82f },
+                BgColor = ColorOf(color) with { A = 0.94f },
+                BorderColor = ColorOf(color),
+                BorderWidthLeft = 1,
+                BorderWidthTop = 1,
+                BorderWidthRight = 1,
+                BorderWidthBottom = 1,
                 CornerRadiusTopLeft = 4,
                 CornerRadiusTopRight = 4,
                 CornerRadiusBottomLeft = 4,
@@ -947,27 +952,31 @@ namespace STS2RitsuMetrics.Ui
                 CornerRadiusBottomLeft = 4,
                 CornerRadiusBottomRight = 4,
             });
-            bar.AddChild(MeterTextBackdrop(style));
-            var label = Label(text, style);
-            ApplyMeterTextReadability(label, style);
-            label.MouseFilter = Control.MouseFilterEnum.Ignore;
-            label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
-            label.ClipText = true;
-            label.LayoutMode = 1;
-            label.AnchorsPreset = (int)Control.LayoutPreset.FullRect;
-            label.OffsetLeft = 8f;
-            label.OffsetRight = -8f;
-            label.VerticalAlignment = VerticalAlignment.Center;
-            bar.AddChild(label);
+            bar.AddChild(MeterTextBackdrop());
+            if (!string.IsNullOrEmpty(text))
+            {
+                var label = Label(text, style);
+                ApplyMeterTextReadability(label);
+                label.MouseFilter = Control.MouseFilterEnum.Ignore;
+                label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
+                label.ClipText = true;
+                label.LayoutMode = 1;
+                label.AnchorsPreset = (int)Control.LayoutPreset.FullRect;
+                label.OffsetLeft = 8f;
+                label.OffsetRight = -8f;
+                label.VerticalAlignment = VerticalAlignment.Center;
+                bar.AddChild(label);
+            }
+
             DashboardTooltip.SetValue(bar, text, value, maximum);
             return bar;
         }
 
-        private static ColorRect MeterTextBackdrop(DashboardStyleDefinition style)
+        private static ColorRect MeterTextBackdrop()
         {
             return new()
             {
-                Color = ColorOf(PlayerColorPalette.ReadableTextBackdrop(style.TextColor)),
+                Color = ColorOf(PlayerColorPalette.MeterTextBackdropColor),
                 MouseFilter = Control.MouseFilterEnum.Ignore,
                 LayoutMode = 1,
                 AnchorsPreset = (int)Control.LayoutPreset.FullRect,
@@ -1005,11 +1014,11 @@ namespace STS2RitsuMetrics.Ui
                 OffsetRight = -9f,
             };
             var name = TruncatedLabel(labelText, style);
-            ApplyMeterTextReadability(name, style);
+            ApplyMeterTextReadability(name);
             name.MouseFilter = Control.MouseFilterEnum.Ignore;
             labels.AddChild(name);
             var amount = Label(valueText, style, false, style.FontSize + 1);
-            ApplyMeterTextReadability(amount, style);
+            ApplyMeterTextReadability(amount);
             amount.MouseFilter = Control.MouseFilterEnum.Ignore;
             amount.CustomMinimumSize = new(72, 0);
             amount.HorizontalAlignment = HorizontalAlignment.Right;
@@ -1019,13 +1028,14 @@ namespace STS2RitsuMetrics.Ui
             return new(bar, name, amount);
         }
 
-        private static void ApplyMeterTextReadability(Label label, DashboardStyleDefinition style)
+        private static void ApplyMeterTextReadability(Label label)
         {
+            const string textColor = "FFFFFFFF";
             label.Modulate = Colors.White;
-            label.AddThemeColorOverride("font_color", ColorOf(style.TextColor));
+            label.AddThemeColorOverride("font_color", ColorOf(textColor));
             label.AddThemeColorOverride("font_outline_color",
-                ColorOf(PlayerColorPalette.ReadableTextOutline(style.TextColor)));
-            label.AddThemeConstantOverride("outline_size", 2);
+                ColorOf(PlayerColorPalette.ReadableTextOutline(textColor)));
+            label.AddThemeConstantOverride("outline_size", 1);
         }
 
         protected static Control Surface(

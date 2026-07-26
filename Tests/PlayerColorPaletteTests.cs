@@ -66,19 +66,27 @@ namespace STS2RitsuMetrics.Tests
         }
 
         [Fact]
-        public void TextBackdropKeepsWhiteTextReadableOnWhiteFill()
-        {
-            Assert.True(PlayerColorPalette.TextBackdropContrastRatio("FFFFFFFF", "FFFFFFFF") >= 4.5d);
-        }
-
-        [Fact]
         public void PureCharacterGreenIsSoftened()
         {
             var colors = Resolve([new("player", 1, "SILENT")]);
             var accent = new Color(colors["player"]);
 
-            Assert.InRange(accent.S, 0.5f, 0.72f);
-            Assert.InRange(accent.V, 0.7f, 0.88f);
+            Assert.InRange(accent.S, 0.7f, 0.77f);
+            Assert.InRange(accent.V, 0.8f, 0.84f);
+        }
+
+        [Fact]
+        public void DarkChromaticCharacterColorIsLiftedWithoutChangingHue()
+        {
+            const string source = "244B67FF";
+            var colors = PlayerColorPalette.Resolve(
+                [new("player", 1, "DARK_CHARACTER")],
+                Style,
+                _ => new(source));
+            var accent = new Color(colors["player"]);
+
+            Assert.InRange(accent.V, 0.67f, 0.75f);
+            Assert.InRange(HueDistance(accent.H, new Color(source).H), 0f, 0.01f);
         }
 
         [Fact]

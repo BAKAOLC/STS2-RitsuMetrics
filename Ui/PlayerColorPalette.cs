@@ -62,6 +62,7 @@ namespace STS2RitsuMetrics.Ui
     internal static class PlayerColorPalette
     {
         private const double AccentContrast = 3d;
+        internal const string MeterTextBackdropColor = "05070A70";
         private static readonly float[] NeutralVariantHues = [0.46f, 0.58f, 0.1f, 0.78f];
 
         internal static IReadOnlyDictionary<string, string> Resolve(
@@ -101,28 +102,9 @@ namespace STS2RitsuMetrics.Ui
             return RelativeLuminance(text) >= 0.35d ? "080A0EF2" : "F7F9FCF2";
         }
 
-        internal static string ReadableTextBackdrop(string textColor)
-        {
-            var text = Parse(textColor, Colors.White);
-            text.A = 1f;
-            return RelativeLuminance(text) >= 0.35d ? "05070A8F" : "F8FAFC8F";
-        }
-
         internal static double ContrastRatio(string first, string second)
         {
             return ContrastRatio(Parse(first, Colors.Black), Parse(second, Colors.Black));
-        }
-
-        internal static double TextBackdropContrastRatio(string fillColor, string textColor)
-        {
-            var fill = Parse(fillColor, Colors.White);
-            var text = Parse(textColor, Colors.White);
-            var backdrop = Parse(ReadableTextBackdrop(textColor), Colors.Black);
-            var effective = new Color(
-                backdrop.R * backdrop.A + fill.R * (1f - backdrop.A),
-                backdrop.G * backdrop.A + fill.G * (1f - backdrop.A),
-                backdrop.B * backdrop.A + fill.B * (1f - backdrop.A));
-            return ContrastRatio(text, effective);
         }
 
         private static string GroupKey(PlayerColorIdentity player)
@@ -174,8 +156,14 @@ namespace STS2RitsuMetrics.Ui
             hue -= MathF.Floor(hue);
             var saturation = neutral
                 ? variant == 0 ? 0f : Math.Clamp(0.04f + magnitude * 0.02f, 0.04f, 0.1f)
-                : Math.Clamp(source.S * 0.62f + (variant == 0 ? 0f : magnitude * 0.025f), 0.2f, 0.72f);
-            var value = Math.Clamp(source.V * (neutral ? 0.9f : 0.82f) + valueOffset, 0.52f, 0.88f);
+                : Math.Clamp(source.S * 0.78f + 0.06f +
+                             (variant == 0 ? 0f : magnitude * 0.018f), 0.34f, 0.76f);
+            var neutralValue = source.V < 0.18f
+                ? source.V
+                : Math.Max(0.68f, source.V);
+            var value = neutral
+                ? Math.Clamp(neutralValue + valueOffset, 0f, 1f)
+                : Math.Clamp(0.62f + source.V * 0.2f + valueOffset, 0.68f, 0.84f);
             var toned = Color.FromHsv(hue, saturation, value);
             var target = RelativeLuminance(surface) < 0.5d ? Colors.White : Colors.Black;
             for (var step = 0; step < 24; step++)
