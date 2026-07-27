@@ -13,6 +13,21 @@ namespace STS2RitsuMetrics.Ui
         private const int MinimumFontSize = 12;
         private const int MaximumFontSize = 24;
 
+        internal static float MinimumGridWidth(
+            int columns,
+            float minimumColumnWidth,
+            float horizontalSeparation,
+            float horizontalPadding = 0f)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(columns, 1);
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(minimumColumnWidth, 0f);
+            ArgumentOutOfRangeException.ThrowIfNegative(horizontalSeparation);
+            ArgumentOutOfRangeException.ThrowIfNegative(horizontalPadding);
+            return columns * minimumColumnWidth
+                   + (columns - 1) * horizontalSeparation
+                   + horizontalPadding * 2f;
+        }
+
         internal static int MetricOrder(string metricId)
         {
             return metricId switch

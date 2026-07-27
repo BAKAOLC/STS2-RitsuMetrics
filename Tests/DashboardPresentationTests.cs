@@ -24,5 +24,11 @@ namespace STS2RitsuMetrics.Tests
 
             Assert.Equal(int.MaxValue, DashboardPresentation.HistoryItemLimit(parameters, 200));
         }
+
+        [Fact]
+        public void MinimumGridWidthIncludesColumnsGapsAndContainerPadding()
+        {
+            Assert.Equal(481f, DashboardPresentation.MinimumGridWidth(4, 112f, 5f, 9f));
+        }
     }
 }

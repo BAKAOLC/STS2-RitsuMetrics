@@ -8,6 +8,12 @@ namespace STS2RitsuMetrics.Ui
 {
     internal sealed partial class OverviewRenderer
     {
+        private const int PlayerSummaryMaximumColumns = 2;
+        private const int PlayerKpiColumns = 4;
+        private const float PlayerKpiMinimumColumnWidth = 112f;
+        private const int PlayerKpiHorizontalSeparation = 5;
+        private const int PlayerCardPadding = 9;
+
         private static readonly OverviewSectionDefinition[] Sections =
         [
             new(OverviewSection.Offense, "overview.offense", "Damage", MetricIds.DamageDealt,
@@ -85,7 +91,12 @@ namespace STS2RitsuMetrics.Ui
             DashboardStyleDefinition style,
             bool singleLine)
         {
-            var grid = ResponsiveGrid(2, 320f);
+            var minimumCardWidth = DashboardPresentation.MinimumGridWidth(
+                PlayerKpiColumns,
+                PlayerKpiMinimumColumnWidth,
+                PlayerKpiHorizontalSeparation,
+                PlayerCardPadding);
+            var grid = ResponsiveGrid(PlayerSummaryMaximumColumns, minimumCardWidth);
             var playerAccents = PlayerAccents(players, style);
             for (var index = 0; index < players.Length; index++)
             {
@@ -97,7 +108,11 @@ namespace STS2RitsuMetrics.Ui
                 var body = new VBoxContainer();
                 body.AddThemeConstantOverride("separation", 6);
                 body.AddChild(PlayerHeader(player, index + 1, damage, totalDamage, accent, style, singleLine));
-                var kpis = ResponsiveGrid(4, 112f, 5, 5);
+                var kpis = ResponsiveGrid(
+                    PlayerKpiColumns,
+                    PlayerKpiMinimumColumnWidth,
+                    PlayerKpiHorizontalSeparation,
+                    PlayerKpiHorizontalSeparation);
                 kpis.AddChild(Kpi("overview.appliedDamage", "Applied damage (AD)", damage, accent, style));
                 kpis.AddChild(Kpi("overview.responsibilityDamage", "Responsibility damage (RD)",
                     MetricForDisplay(player, MetricIds.DamageContribution), Accent(style, 4), style));
@@ -122,7 +137,7 @@ namespace STS2RitsuMetrics.Ui
                 kpis.AddChild(Kpi("analysis.overkill", "Overkill", Metric(player, MetricIds.Overkill),
                     style.WarningColor, style));
                 body.AddChild(kpis);
-                grid.AddChild(Surface(body, style, accent, 9));
+                grid.AddChild(Surface(body, style, accent, PlayerCardPadding));
             }
 
             return grid;
