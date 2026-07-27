@@ -131,7 +131,6 @@ namespace STS2RitsuMetrics.Ui
             if (key.Keycode == Key.Escape && _analysisCenter is { Visible: true } analysisCenter)
             {
                 analysisCenter.Hide();
-                DashboardConsumersChanged();
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -204,7 +203,6 @@ namespace STS2RitsuMetrics.Ui
             if (_analysisCenter is not { } analysisCenter || !IsInstanceValid(analysisCenter))
                 return;
             analysisCenter.Toggle();
-            DashboardConsumersChanged();
         }
 
         internal void OpenCurrentRunOverview()
@@ -212,7 +210,6 @@ namespace STS2RitsuMetrics.Ui
             if (_analysisCenter is not { } analysisCenter || !IsInstanceValid(analysisCenter))
                 return;
             analysisCenter.OpenCurrentRunOverview();
-            DashboardConsumersChanged();
         }
 
         internal void FocusWindow(string instanceId)
@@ -553,7 +550,6 @@ namespace STS2RitsuMetrics.Ui
             AddChild(_manager);
             _analysisCenter = new() { Theme = _typographyTheme };
             _analysisCenter.Initialize(_registry);
-            _analysisCenter.VisibilityChanged += DashboardConsumersChanged;
             AddChild(_analysisCenter);
         }
 
@@ -623,6 +619,7 @@ namespace STS2RitsuMetrics.Ui
         {
             if (change.Kind.HasFlag(MetricsChangeKind.RunStructure))
                 ScheduleVisibilityUpdate();
+            _analysisCenter?.MarkDirty(change);
             if (!RequiredDataPlan().IsAffectedBy(change))
                 return;
 
@@ -810,8 +807,6 @@ namespace STS2RitsuMetrics.Ui
                     window.MarkDirty();
                 else
                     window.MarkDirty(data.Change);
-            if (data.Change.Kind != MetricsChangeKind.None)
-                _analysisCenter?.MarkDirty();
         }
 
         private static DashboardDataCache CaptureDashboardData(
@@ -865,12 +860,12 @@ namespace STS2RitsuMetrics.Ui
             var consumers = _windows.Values
                 .Where(window => window.ConsumesDashboardData)
                 .Select(window => (window.DataScope, window.DataRequirements));
-            return DashboardDataPlan.Create(consumers, _analysisCenter?.Visible == true);
+            return DashboardDataPlan.Create(consumers);
         }
 
         private bool HasVisibleDataConsumer()
         {
-            return _analysisCenter?.Visible == true || _windows.Values.Any(window => window.ConsumesDashboardData);
+            return _windows.Values.Any(window => window.ConsumesDashboardData);
         }
 
         private void UpdateVisibility()

@@ -19,14 +19,11 @@ namespace STS2RitsuMetrics.Core
         }
 
         internal static DashboardDataPlan Create(
-            IEnumerable<(DashboardDataScope Scope, DashboardDataRequirements Requirements)> consumers,
-            bool includeAnalysisCenter = false)
+            IEnumerable<(DashboardDataScope Scope, DashboardDataRequirements Requirements)> consumers)
         {
-            var components = includeAnalysisCenter
-                ? DashboardDataComponents.All
-                : DashboardDataComponents.None;
+            var components = DashboardDataComponents.None;
             var needsRunAggregate = false;
-            var allMetrics = includeAnalysisCenter;
+            var allMetrics = false;
             var metricIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (scope, requirements) in consumers)
             {

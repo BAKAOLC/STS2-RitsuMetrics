@@ -99,21 +99,30 @@ namespace STS2RitsuMetrics.Core
             bool includeTimeline,
             bool includeCompletedCombats,
             bool projectCompletedCombats,
-            IReadOnlySet<string>? metricIds)
+            IReadOnlySet<string>? metricIds,
+            string? selectedCombatId = null)
         {
             lock (_gate)
             {
                 return _liveRun?.SnapshotForLiveView(includeEvents, includeTimeline, includeCompletedCombats,
-                    projectCompletedCombats, metricIds);
+                    projectCompletedCombats, metricIds, selectedCombatId);
             }
         }
 
         internal RunSnapshot? GetLiveRunSummary()
         {
+            RunSnapshot? run;
             lock (_gate)
             {
-                return _liveRun?.Snapshot(false, false);
+                run = _liveRun?.SnapshotForLiveView(
+                    false,
+                    false,
+                    true,
+                    false,
+                    AnalysisSnapshotSelector.SummaryMetricIds);
             }
+
+            return run == null ? null : AnalysisSnapshotSelector.Summarize(run);
         }
 
         internal IReadOnlyList<RunSnapshot> GetAvailableRuns(bool includeEvents)
@@ -151,13 +160,39 @@ namespace STS2RitsuMetrics.Core
             }
         }
 
-        internal static RunSnapshot? GetSavedRun(string runId, bool includeEvents = true)
+        internal static IReadOnlyList<RunSnapshot> GetSavedRunSummaries()
+        {
+            try
+            {
+                var runs = ModData.History.Runs.Select(AnalysisSnapshotSelector.Summarize).ToArray();
+                Volatile.Write(ref _historyReadFailureLogged, 0);
+                return runs;
+            }
+            catch (Exception exception)
+            {
+                LogHistoryReadFailure(exception);
+                return [];
+            }
+        }
+
+        internal static RunSnapshot? GetSavedRun(
+            string runId,
+            bool includeEvents = true,
+            bool includeTimeline = true,
+            string? selectedCombatId = null)
         {
             try
             {
                 var run = ModData.History.Runs.LastOrDefault(candidate => candidate.RunId == runId);
                 Volatile.Write(ref _historyReadFailureLogged, 0);
-                return run == null ? null : SnapshotCloner.Clone(run, includeEvents);
+                if (run == null)
+                    return null;
+                if (selectedCombatId != null)
+                    run = run with
+                    {
+                        Combats = run.Combats.Where(combat => combat.CombatId == selectedCombatId).ToArray(),
+                    };
+                return SnapshotCloner.Clone(run, includeEvents, includeTimeline);
             }
             catch (Exception exception)
             {

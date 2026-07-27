@@ -77,12 +77,45 @@ namespace STS2RitsuMetrics.Tests
             Assert.Single(changed.Timeline!);
         }
 
+        [Fact]
+        public void LiveViewCanSelectOneCompletedCombatWithoutIncludingTheRest()
+        {
+            var first = Combat("first");
+            var selected = Combat("selected");
+            var active = Combat("active");
+            var run = new MutableRunSession
+            {
+                RunId = "run",
+                StartedAtUtc = DateTimeOffset.UnixEpoch,
+            };
+            run.SetActiveCombat(first);
+            _ = run.CompleteActiveCombat(DateTimeOffset.UnixEpoch.AddMinutes(1));
+            run.SetActiveCombat(selected);
+            _ = run.CompleteActiveCombat(DateTimeOffset.UnixEpoch.AddMinutes(2));
+            run.SetActiveCombat(active);
+
+            var snapshot = run.SnapshotForLiveView(
+                false,
+                false,
+                false,
+                true,
+                null,
+                "selected");
+
+            Assert.Equal("selected", Assert.Single(snapshot.Combats).CombatId);
+        }
+
         private static MutableCombatSession Combat()
+        {
+            return Combat("combat");
+        }
+
+        private static MutableCombatSession Combat(string combatId)
         {
             return new()
             {
                 RunId = "run",
-                CombatId = "combat",
+                CombatId = combatId,
                 ActIndex = 0,
                 Floor = 1,
                 StartedAtUtc = DateTimeOffset.UnixEpoch,

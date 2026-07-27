@@ -22,6 +22,16 @@ namespace STS2RitsuMetrics.Tests
         }
 
         [Fact]
+        public void NoFloatingWindowsRequestNoBackgroundSnapshot()
+        {
+            var plan = DashboardDataPlan.Create([]);
+
+            Assert.Equal(DashboardDataComponents.None, plan.Components);
+            Assert.False(plan.NeedsRunAggregate);
+            Assert.Empty(plan.MetricIds!);
+        }
+
+        [Fact]
         public void CurrentRunRequestsOneSharedAggregateWithoutTimeline()
         {
             var plan = DashboardDataPlan.Create(

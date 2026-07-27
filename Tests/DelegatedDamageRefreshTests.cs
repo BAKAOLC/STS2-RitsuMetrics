@@ -23,8 +23,8 @@ namespace STS2RitsuMetrics.Tests
         [Fact]
         public void SingleLineMeterTextChangesAfterAttackAndReactiveDamage()
         {
-            var afterAttack = MetricMeterRenderer.SingleLineValueText(10m, 10m, false);
-            var afterThorns = MetricMeterRenderer.SingleLineValueText(13m, 13m, false);
+            var afterAttack = DashboardRendererBase.SingleLineValueText(10m, 10m, false);
+            var afterThorns = DashboardRendererBase.SingleLineValueText(13m, 13m, false);
 
             Assert.Equal("10", afterAttack);
             Assert.Equal("13", afterThorns);

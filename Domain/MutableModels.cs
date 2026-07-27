@@ -123,21 +123,25 @@ namespace STS2RitsuMetrics.Domain
             bool includeTimeline,
             bool includeCompletedCombats,
             bool projectCompletedCombats,
-            IReadOnlySet<string>? metricIds)
+            IReadOnlySet<string>? metricIds,
+            string? selectedCombatId = null)
         {
             lock (_gate)
             {
                 var combats = new List<CombatSnapshot>(_completedCombats.Count + (_activeCombat == null ? 0 : 1));
-                if (includeCompletedCombats)
-                {
-                    if (projectCompletedCombats)
-                        combats.AddRange(_completedCombats.Select(combat =>
-                            Project(combat, includeEvents, includeTimeline)));
-                    else
-                        combats.AddRange(_completedCombats);
-                }
+                var completedCombats = includeCompletedCombats
+                    ? _completedCombats.AsEnumerable()
+                    : selectedCombatId == null
+                        ? []
+                        : _completedCombats.Where(combat => combat.CombatId == selectedCombatId);
+                if (projectCompletedCombats)
+                    combats.AddRange(completedCombats.Select(combat =>
+                        Project(combat, includeEvents, includeTimeline)));
+                else
+                    combats.AddRange(completedCombats);
 
-                if (_activeCombat != null)
+                if (_activeCombat != null &&
+                    (selectedCombatId == null || _activeCombat.CombatId == selectedCombatId))
                     combats.Add(_activeCombat.Snapshot(includeEvents, includeTimeline, metricIds));
                 return new(RunId, StartedAtUtc, EndedAtUtc, IsMultiplayer, IsDaily, IsVictory, IsAbandoned,
                     combats.AsReadOnly())

@@ -51,7 +51,7 @@ namespace STS2RitsuMetrics.Tests
         [Fact]
         public void DifferentAscensionLevelsAreRejected()
         {
-            var target = Run("run-a", Identity("seed", 10), Combat("run-a", "combat-1", 1));
+            var target = Run("run-a", Identity("seed"), Combat("run-a", "combat-1", 1));
             var source = Run("run-b", Identity("seed", 20), Combat("run-b", "combat-2", 2));
 
             var result = RunMergeService.Analyze(target, source);

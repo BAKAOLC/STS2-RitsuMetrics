@@ -12,6 +12,7 @@
         <Copyright>Copyright © 2026 OLC</Copyright>
         <EnableDynamicLoading>true</EnableDynamicLoading>
         <NoWarn>$(NoWarn);CS0436</NoWarn>
+        <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
         <Sts2ApiSignatureRoot Condition="'$(Sts2ApiSignatureRoot)' == ''">$(MSBuildProjectDirectory)\..\sts2-api-signatures</Sts2ApiSignatureRoot>
         <Sts2ApiBaseline>0.107.1</Sts2ApiBaseline>
         <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and Exists('$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)\sts2.dll')">$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)</Sts2DataDir>
