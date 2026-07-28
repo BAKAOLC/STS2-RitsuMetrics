@@ -130,7 +130,7 @@ namespace STS2RitsuMetrics.Ui
                 return;
             if (key.Keycode == Key.Escape && _analysisCenter is { Visible: true } analysisCenter)
             {
-                analysisCenter.Hide();
+                analysisCenter.Close();
                 GetViewport().SetInputAsHandled();
                 return;
             }
@@ -452,7 +452,6 @@ namespace STS2RitsuMetrics.Ui
         {
             if (!IsInsideTree())
                 return;
-            LocalizedSnapshotResolver.ClearCaches();
             lock (_dashboardDataGate)
             {
                 _localizedRun = null;

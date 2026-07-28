@@ -102,15 +102,26 @@ namespace STS2RitsuMetrics.Ui
         {
             if (Visible)
             {
-                Hide();
+                Close();
                 return;
             }
 
             ReloadRuns();
+            if (_renderer == null)
+                ReplaceRenderer();
             ApplyFullscreenGeometry();
             Show();
             MoveToFront();
             MarkDirty();
+        }
+
+        internal void Close()
+        {
+            Hide();
+            DisposeRenderer();
+            _selectedRunData = null;
+            _selectedRunDataKey = null;
+            _selectedRunAggregateCache.Reset();
         }
 
         internal void OpenCurrentRunOverview()

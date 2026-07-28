@@ -121,7 +121,7 @@ namespace STS2RitsuMetrics.Ui
             _header.AddChild(exportCsv);
             _close = HeaderIconButton(DashboardIcon.Close, ModLocalization.Get("overlay.close", "Close"),
                 DashboardButtonKind.Danger);
-            _close.Pressed += Hide;
+            _close.Pressed += Close;
             _header.AddChild(_close);
         }
 
