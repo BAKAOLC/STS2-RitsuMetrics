@@ -14,8 +14,8 @@ namespace STS2RitsuMetrics.Ui
         private static readonly Vector2 ManagerSize = new(600f, 560f);
         private DashboardConfigurationDialog _configuration = null!;
         private Label _count = null!;
-        private bool _dragging;
         private Vector2 _dragOffset;
+        private bool _dragging;
         private DashboardHost _host = null!;
         private DashboardRegistry _registry = null!;
         private VBoxContainer _windows = null!;

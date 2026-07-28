@@ -12,41 +12,67 @@ namespace STS2RitsuMetrics.Core
             var metricFilter = query.MetricIds is { Count: > 0 }
                 ? new HashSet<string>(query.MetricIds, StringComparer.Ordinal)
                 : null;
-            var runs = MetricsRepository.GetSavedRuns().ToList();
             var live = repository.GetLiveRun(true);
-            if (live != null)
+            var candidates = MetricsRepository.GetSavedRunSummaries()
+                .Where(run => live == null || run.RunId != live.RunId)
+                .Where(run => query.RunId == null || run.RunId == query.RunId)
+                .SelectMany(run => run.Combats.Select(combat => new QueryCandidate(run.RunId, combat, false)))
+                .ToList();
+            if (live != null && (query.RunId == null || live.RunId == query.RunId))
+                candidates.AddRange(live.Combats.Select(combat => new QueryCandidate(live.RunId, combat, true)));
+
+            var filteredCandidates = candidates
+                .Where(candidate => query.CombatId == null || candidate.Combat.CombatId == query.CombatId)
+                .Where(candidate => query.ActIndex == null || candidate.Combat.ActIndex == query.ActIndex)
+                .Where(candidate => query.MinimumFloor == null || candidate.Combat.Floor >= query.MinimumFloor)
+                .Where(candidate => query.MaximumFloor == null || candidate.Combat.Floor <= query.MaximumFloor)
+                .Where(candidate => query.FromUtc == null || candidate.Combat.StartedAtUtc >= query.FromUtc)
+                .Where(candidate => query.ToUtc == null || candidate.Combat.StartedAtUtc <= query.ToUtc)
+                .OrderByDescending(candidate => candidate.Combat.StartedAtUtc)
+                .ToArray();
+            var limit = Math.Clamp(query.Limit, 1, 5000);
+            var selected = new List<CombatSnapshot>(Math.Min(limit, filteredCandidates.Length));
+            var totalMatches = 0;
+            foreach (var candidate in filteredCandidates)
             {
-                var liveIndex = runs.FindIndex(run => run.RunId == live.RunId);
-                if (liveIndex < 0)
-                    runs.Add(live);
-                else
-                    runs[liveIndex] = live;
+                if (query.PlayerNetId == null)
+                {
+                    totalMatches++;
+                    if (selected.Count < limit && Load(candidate) is { } combat)
+                        selected.Add(combat);
+                    continue;
+                }
+
+                var materialized = Load(candidate);
+                if (materialized == null ||
+                    materialized.Players.All(player => player.PlayerNetId != query.PlayerNetId))
+                    continue;
+                totalMatches++;
+                if (selected.Count < limit)
+                    selected.Add(materialized);
             }
 
-            var matches = runs
-                .Where(run => query.RunId == null || run.RunId == query.RunId)
-                .SelectMany(run => run.Combats)
-                .Where(combat => query.CombatId == null || combat.CombatId == query.CombatId)
-                .Where(combat => query.ActIndex == null || combat.ActIndex == query.ActIndex)
-                .Where(combat => query.MinimumFloor == null || combat.Floor >= query.MinimumFloor)
-                .Where(combat => query.MaximumFloor == null || combat.Floor <= query.MaximumFloor)
-                .Where(combat => query.FromUtc == null || combat.StartedAtUtc >= query.FromUtc)
-                .Where(combat => query.ToUtc == null || combat.StartedAtUtc <= query.ToUtc)
-                .Where(combat =>
-                    query.PlayerNetId == null || combat.Players.Any(player => player.PlayerNetId == query.PlayerNetId))
-                .OrderByDescending(combat => combat.StartedAtUtc)
-                .ToArray();
-            var totalMatches = matches.Length;
-            var limit = Math.Clamp(query.Limit, 1, 5000);
-            var selected = matches.Take(limit)
+            var result = selected
                 .Select(combat => FilterCombat(combat, query.PlayerNetId, metricFilter, query.IncludeEvents,
                     query.IncludeTimeline))
                 .ToArray();
-            var totals = selected.SelectMany(combat => combat.Players)
+            var totals = result.SelectMany(combat => combat.Players)
                 .SelectMany(player => player.Totals)
                 .GroupBy(pair => pair.Key, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => group.Sum(pair => pair.Value), StringComparer.Ordinal);
-            return new(selected, totals, totalMatches, totalMatches > selected.Length);
+            return new(result, totals, totalMatches, totalMatches > result.Length);
+
+            CombatSnapshot? Load(QueryCandidate candidate)
+            {
+                if (candidate.IsLive)
+                    return candidate.Combat;
+                return MetricsRepository.GetSavedRun(
+                        candidate.RunId,
+                        query.IncludeEvents,
+                        query.IncludeTimeline,
+                        candidate.Combat.CombatId)
+                    ?.Combats.SingleOrDefault();
+            }
         }
 
         internal TimelineQueryResult QueryTimeline(TimelineQuery query)
@@ -149,5 +175,7 @@ namespace STS2RitsuMetrics.Core
 
             return result;
         }
+
+        private sealed record QueryCandidate(string RunId, CombatSnapshot Combat, bool IsLive);
     }
 }

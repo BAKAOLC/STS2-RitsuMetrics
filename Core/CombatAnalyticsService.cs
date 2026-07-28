@@ -1946,7 +1946,7 @@ namespace STS2RitsuMetrics.Core
             DateTimeOffset occurredAtUtc)
         {
             var prefix = identity.RunId + '-';
-            var collision = MetricsRepository.GetSavedRuns(false, false).Any(run =>
+            var collision = MetricsRepository.GetSavedRunSummaries().Any(run =>
                 run.RunId == identity.RunId || run.RunId.StartsWith(prefix, StringComparison.Ordinal));
             if (!collision)
                 return identity;
@@ -1962,9 +1962,9 @@ namespace STS2RitsuMetrics.Core
             bool isMultiplayer,
             bool isDaily)
         {
-            var runs = MetricsRepository.GetSavedRuns(false, false);
+            var runs = MetricsRepository.GetSavedRunSummaries();
             if (!isMultiplayer)
-                return runs.LastOrDefault(run => run.RunId == identity.RunId);
+                return Materialize(runs.LastOrDefault(run => run.RunId == identity.RunId));
 
             var prefix = identity.RunId + '-';
             var stable = runs.Where(run => run.IsMultiplayer && run.IsDaily == isDaily &&
@@ -1974,29 +1974,40 @@ namespace STS2RitsuMetrics.Core
                 .OrderByDescending(LastActivity)
                 .FirstOrDefault();
             if (stable != null)
-                return stable;
+                return Materialize(stable);
 
             var currentPlayers = runState.Players.ToDictionary(player => player.NetId,
                 player => Safe(() => player.Character.Id.Entry, string.Empty));
-            return runs.Where(run => run.RunId.StartsWith("sts2-v1-", StringComparison.Ordinal) &&
-                                     run.IsMultiplayer && run.IsDaily == isDaily && run.EndedAtUtc == null &&
-                                     HasCompatiblePlayers(run, currentPlayers))
+            return Materialize(runs.Where(run => run.RunId.StartsWith("sts2-v1-", StringComparison.Ordinal) &&
+                                                 run.IsMultiplayer && run.IsDaily == isDaily &&
+                                                 run.EndedAtUtc == null &&
+                                                 HasCompatiblePlayers(run, currentPlayers))
                 .OrderByDescending(run => LastRecordedFloor(run) <= runState.TotalFloor)
                 .ThenByDescending(run => Math.Min(LastRecordedFloor(run), runState.TotalFloor))
                 .ThenByDescending(LastActivity)
-                .FirstOrDefault();
+                .FirstOrDefault());
+
+            static RunSnapshot? Materialize(RunSnapshot? run)
+            {
+                return run == null ? null : MetricsRepository.GetSavedRun(run.RunId);
+            }
         }
 
         private static bool HasCompatiblePlayers(
             RunSnapshot run,
             Dictionary<ulong, string> currentPlayers)
         {
-            var recordedPlayers = run.Combats.SelectMany(combat => combat.Players)
-                .Where(player => player.PlayerNetId.HasValue)
-                .GroupBy(player => player.PlayerNetId!.Value)
-                .ToDictionary(group => group.Key,
-                    group => group.Select(player => player.CharacterId)
-                        .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty);
+            var recordedPlayers = run.Identity?.Players is { Count: > 0 } identities
+                ? identities.GroupBy(player => player.PlayerNetId)
+                    .ToDictionary(group => group.Key,
+                        group => group.Select(player => player.CharacterId)
+                            .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty)
+                : run.Combats.SelectMany(combat => combat.Players)
+                    .Where(player => player.PlayerNetId.HasValue)
+                    .GroupBy(player => player.PlayerNetId!.Value)
+                    .ToDictionary(group => group.Key,
+                        group => group.Select(player => player.CharacterId)
+                            .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty);
             return recordedPlayers.Count > 0 && recordedPlayers.All(recorded =>
                 currentPlayers.TryGetValue(recorded.Key, out var characterId) &&
                 (string.IsNullOrEmpty(recorded.Value) || string.Equals(recorded.Value, characterId,

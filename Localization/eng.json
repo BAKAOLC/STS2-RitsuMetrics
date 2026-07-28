@@ -121,6 +121,8 @@
   "analysis.subtitle": "Runs, combats, attribution and causal timelines",
   "analysis.open": "Open analytics center",
   "analysis.refresh": "Refresh history",
+  "analysis.loadingHistory": "Loading selected combat history…",
+  "analysis.loadHistoryFailed": "Could not load the selected combat history.",
   "analysis.maximize": "Maximize",
   "analysis.restoreWindow": "Restore window",
   "analysis.exportJson": "Export selection as JSON",

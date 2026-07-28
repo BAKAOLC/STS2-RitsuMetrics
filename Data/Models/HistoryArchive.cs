@@ -13,6 +13,7 @@ namespace STS2RitsuMetrics.Data.Models
 
         private readonly Lock _gate = new();
         private readonly HashSet<string> _mutatedRunIds = new(StringComparer.Ordinal);
+        private Func<CombatSnapshot, CombatSnapshot>? _combatLoader;
         private bool _discardPendingRuns;
         private Action? _loadCompleted;
         private Exception? _loadFailure;
@@ -70,6 +71,45 @@ namespace STS2RitsuMetrics.Data.Models
             ObservePendingLoad(pendingLoad, callback);
         }
 
+        internal void AttachCombatLoader(Func<CombatSnapshot, CombatSnapshot> combatLoader)
+        {
+            lock (_gate)
+            {
+                _combatLoader = combatLoader;
+            }
+        }
+
+        internal RunSnapshot? MaterializeRun(
+            string runId,
+            bool includeEvents,
+            bool includeTimeline,
+            string? combatId = null,
+            CancellationToken cancellationToken = default)
+        {
+            CompletePendingLoadIfReady();
+            RunSnapshot? run;
+            Func<CombatSnapshot, CombatSnapshot>? loader;
+            lock (_gate)
+            {
+                run = _runs.LastOrDefault(candidate => candidate.RunId == runId);
+                loader = _combatLoader;
+            }
+
+            if (run == null)
+                return null;
+
+            var combats = new List<CombatSnapshot>(combatId == null ? run.Combats.Count : 1);
+            foreach (var combat in run.Combats)
+            {
+                if (combatId != null && combat.CombatId != combatId)
+                    continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                combats.Add(Project(loader?.Invoke(combat) ?? combat, includeEvents, includeTimeline));
+            }
+
+            return run with { Combats = combats };
+        }
+
         internal void SetLoadCompletionCallback(Action callback)
         {
             Task<HistoryArchive>? pending;
@@ -121,7 +161,22 @@ namespace STS2RitsuMetrics.Data.Models
                 foreach (var run in _runs)
                     _mutatedRunIds.Add(run.RunId);
                 _runs.Clear();
+                _combatLoader = null;
             }
+        }
+
+        private static CombatSnapshot Project(
+            CombatSnapshot combat,
+            bool includeEvents,
+            bool includeTimeline)
+        {
+            if (includeEvents && includeTimeline)
+                return combat;
+            return combat with
+            {
+                Events = includeEvents ? combat.Events : [],
+                Timeline = includeTimeline ? combat.Timeline : [],
+            };
         }
 
         private void CompletePendingLoadIfReady()
@@ -204,6 +259,7 @@ namespace STS2RitsuMetrics.Data.Models
 
                 DataVersion = loaded.DataVersion;
                 _runs = mergedRuns.OrderBy(run => run.StartedAtUtc).ToList();
+                _combatLoader = loaded._combatLoader;
                 RequiresStorageRewrite |= loaded.RequiresStorageRewrite;
                 _pendingLoad = null;
                 _loadFailure = null;

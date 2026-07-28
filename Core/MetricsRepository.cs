@@ -2,12 +2,14 @@
 
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Data;
+using STS2RitsuMetrics.Data.Models;
 using STS2RitsuMetrics.Domain;
 
 namespace STS2RitsuMetrics.Core
 {
     internal sealed class MetricsRepository
     {
+        private static readonly SemaphoreSlim SavedRunReadGate = new(1, 1);
         private static int _historyReadFailureLogged;
         private readonly Lock _gate = new();
         private MutableRunSession? _liveRun;
@@ -148,8 +150,11 @@ namespace STS2RitsuMetrics.Core
         {
             try
             {
-                var runs = ModData.History.Runs.Select(run =>
-                    SnapshotCloner.Clone(run, includeEvents, includeTimeline)).ToArray();
+                var history = ModData.History;
+                var runs = history.Runs
+                    .Select(run => history.MaterializeRun(run.RunId, includeEvents, includeTimeline))
+                    .OfType<RunSnapshot>()
+                    .ToArray();
                 Volatile.Write(ref _historyReadFailureLogged, 0);
                 return runs;
             }
@@ -181,18 +186,62 @@ namespace STS2RitsuMetrics.Core
             bool includeTimeline = true,
             string? selectedCombatId = null)
         {
+            return ReadSavedRun(ModData.History, runId, includeEvents, includeTimeline, selectedCombatId);
+        }
+
+        internal static async Task<RunSnapshot?> GetSavedRunAsync(
+            string runId,
+            bool includeEvents,
+            bool includeTimeline,
+            string? selectedCombatId,
+            CancellationToken cancellationToken)
+        {
+            var history = ModData.History;
+            await SavedRunReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var run = ModData.History.Runs.LastOrDefault(candidate => candidate.RunId == runId);
+                return await Task.Run(() =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var run = ReadSavedRun(
+                        history,
+                        runId,
+                        includeEvents,
+                        includeTimeline,
+                        selectedCombatId,
+                        cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return run;
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                SavedRunReadGate.Release();
+            }
+        }
+
+        private static RunSnapshot? ReadSavedRun(
+            HistoryArchive history,
+            string runId,
+            bool includeEvents,
+            bool includeTimeline,
+            string? selectedCombatId,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var run = history.MaterializeRun(
+                    runId,
+                    includeEvents,
+                    includeTimeline,
+                    selectedCombatId,
+                    cancellationToken);
                 Volatile.Write(ref _historyReadFailureLogged, 0);
-                if (run == null)
-                    return null;
-                if (selectedCombatId != null)
-                    run = run with
-                    {
-                        Combats = run.Combats.Where(combat => combat.CombatId == selectedCombatId).ToArray(),
-                    };
-                return SnapshotCloner.Clone(run, includeEvents, includeTimeline);
+                return run;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception exception)
             {
@@ -269,12 +318,13 @@ namespace STS2RitsuMetrics.Core
             var result = new RunMergeResult(null, RunMergeFailure.MissingRun);
             try
             {
+                var target = GetSavedRun(targetRunId);
                 ModData.ModifyHistory(archive =>
                 {
                     var targetIndex = archive.Runs.FindIndex(run => run.RunId == targetRunId);
-                    if (targetIndex < 0)
+                    if (targetIndex < 0 || target == null)
                         return;
-                    result = RunMergeService.Analyze(archive.Runs[targetIndex], source);
+                    result = RunMergeService.Analyze(target, source);
                     if (!result.Success)
                         return;
 
@@ -342,7 +392,9 @@ namespace STS2RitsuMetrics.Core
                     var right = candidates[rightIndex];
                     if (!AreContinuousLegacySegments(left, right))
                         continue;
-                    merged = MergeRuns(left, right);
+                    var materializedLeft = GetSavedRun(left.RunId) ?? left;
+                    var materializedRight = GetSavedRun(right.RunId) ?? right;
+                    merged = MergeRuns(materializedLeft, materializedRight);
                     leftId = left.RunId;
                     rightId = right.RunId;
                     return true;
@@ -379,6 +431,12 @@ namespace STS2RitsuMetrics.Core
 
         private static Dictionary<ulong, string> RecordedPlayers(RunSnapshot run)
         {
+            if (run.Identity?.Players is { Count: > 0 } identities)
+                return identities
+                    .GroupBy(player => player.PlayerNetId)
+                    .ToDictionary(group => group.Key,
+                        group => group.Select(player => player.CharacterId)
+                            .FirstOrDefault(characterId => !string.IsNullOrEmpty(characterId)) ?? string.Empty);
             return run.Combats.SelectMany(combat => combat.Players)
                 .Where(player => player.PlayerNetId.HasValue)
                 .GroupBy(player => player.PlayerNetId!.Value)

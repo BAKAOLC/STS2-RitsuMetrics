@@ -121,6 +121,8 @@
   "analysis.subtitle": "跑局、战斗、伤害归因与因果时间线",
   "analysis.open": "打开分析中心",
   "analysis.refresh": "刷新历史记录",
+  "analysis.loadingHistory": "正在读取所选战斗记录…",
+  "analysis.loadHistoryFailed": "无法读取所选战斗记录。",
   "analysis.maximize": "最大化",
   "analysis.restoreWindow": "还原窗口",
   "analysis.exportJson": "将当前选择导出为 JSON",

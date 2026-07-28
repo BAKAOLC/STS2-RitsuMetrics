@@ -64,6 +64,9 @@ namespace STS2RitsuMetrics.Ui
         private RunSnapshot? _selectedRunData;
         private SelectedRunDataKey? _selectedRunDataKey;
         private string? _selectedRunId;
+        private CancellationTokenSource? _selectedRunLoadCancellation;
+        private SelectedRunDataKey? _selectedRunLoadKey;
+        private int _selectedRunLoadRevision;
         private Label _selectionMeta = null!;
         private Label _selectionTitle = null!;
         private Label _status = null!;
@@ -119,9 +122,7 @@ namespace STS2RitsuMetrics.Ui
         {
             Hide();
             DisposeRenderer();
-            _selectedRunData = null;
-            _selectedRunDataKey = null;
-            _selectedRunAggregateCache.Reset();
+            InvalidateSelectedRunData();
         }
 
         internal void OpenCurrentRunOverview()
@@ -132,8 +133,7 @@ namespace STS2RitsuMetrics.Ui
             if (currentRun != null)
             {
                 _selectedRunId = currentRun.RunId;
-                _selectedRunData = null;
-                _selectedRunDataKey = null;
+                InvalidateSelectedRunData();
                 _selectedCombatId = currentRun.Combats.Count == 0
                     ? null
                     : currentRun.Combats[^1].CombatId;
@@ -168,8 +168,7 @@ namespace STS2RitsuMetrics.Ui
         {
             if (!Visible || !change.Kind.HasFlag(MetricsChangeKind.RunStructure))
                 return;
-            _selectedRunData = null;
-            _selectedRunDataKey = null;
+            InvalidateSelectedRunData();
             MarkDirty();
         }
 
@@ -273,9 +272,7 @@ namespace STS2RitsuMetrics.Ui
             _historyRevision++;
             RebuildSearchIndex();
             EnsureSelection();
-            _selectedRunData = null;
-            _selectedRunDataKey = null;
-            _selectedRunAggregateCache.Reset();
+            InvalidateSelectedRunData();
             _historyHash = 0;
             RefreshHistoryIfNeeded();
             MarkDirty();
@@ -296,10 +293,7 @@ namespace STS2RitsuMetrics.Ui
 
             _activeRunId = live.RunId;
             if (_selectedRunId == live.RunId)
-            {
-                _selectedRunData = null;
-                _selectedRunDataKey = null;
-            }
+                InvalidateSelectedRunData();
 
             var runs = _runs;
             var index = Array.FindIndex(runs, run => run.RunId == live.RunId);
@@ -597,9 +591,7 @@ namespace STS2RitsuMetrics.Ui
             var run = _runs.FirstOrDefault(candidate => candidate.RunId == runId);
             _selectedCombatId = run?.Combats.MaxBy(combat => combat.StartedAtUtc)?.CombatId;
             _scope.Select(1);
-            _selectedRunData = null;
-            _selectedRunDataKey = null;
-            _selectedRunAggregateCache.Reset();
+            InvalidateSelectedRunData();
             _historyHash = 0;
             MarkDirty();
         }
@@ -611,9 +603,7 @@ namespace STS2RitsuMetrics.Ui
             _expandedRunIds.Clear();
             _expandedRunIds.Add(runId);
             _scope.Select(0);
-            _selectedRunData = null;
-            _selectedRunDataKey = null;
-            _selectedRunAggregateCache.Reset();
+            InvalidateSelectedRunData();
             _historyHash = 0;
             MarkDirty();
         }
@@ -705,7 +695,7 @@ namespace STS2RitsuMetrics.Ui
             }
 
             _selectedRunId = targetRunId;
-            _selectedRunData = null;
+            InvalidateSelectedRunData();
             ReloadRuns();
             Main.Collectors.NotifyChanged();
             _status.Text = ModLocalization.Format("analysis.mergeRun.success",
@@ -758,7 +748,7 @@ namespace STS2RitsuMetrics.Ui
             _expandedRunIds.Remove(runId);
             _selectedRunId = null;
             _selectedCombatId = null;
-            _selectedRunData = null;
+            InvalidateSelectedRunData();
             ReloadRuns();
             Main.Collectors.NotifyChanged();
         }
@@ -801,19 +791,26 @@ namespace STS2RitsuMetrics.Ui
                 : _selectedCombatId;
             var includeCompletedCombats = scope == DashboardDataScope.CurrentRun ||
                                           requirements.Components.HasFlag(DashboardDataComponents.RunCombats);
-            var run = _selectedRunId == _activeRunId
-                ? Main.Repository.GetLiveRunForDashboard(
-                    includeEvents,
-                    includeTimeline,
-                    includeCompletedCombats,
-                    true,
+            if (_selectedRunId != _activeRunId)
+            {
+                BeginSelectedRunLoad(
+                    key,
+                    requirements,
                     metricIds,
-                    selectedCombatId)
-                : MetricsRepository.GetSavedRun(
-                    _selectedRunId,
+                    scope,
                     includeEvents,
                     includeTimeline,
                     selectedCombatId);
+                return null;
+            }
+
+            var run = Main.Repository.GetLiveRunForDashboard(
+                includeEvents,
+                includeTimeline,
+                includeCompletedCombats,
+                true,
+                metricIds,
+                selectedCombatId);
             if (run != null)
             {
                 run = AnalysisSnapshotSelector.Select(
@@ -822,9 +819,7 @@ namespace STS2RitsuMetrics.Ui
                     requirements.Components,
                     _selectedCombatId);
                 run = DashboardSnapshotProjector.Project(run, metricIds)!;
-                _selectedRunData = _selectedRunId == _activeRunId
-                    ? run
-                    : LocalizedSnapshotResolver.Resolve(run);
+                _selectedRunData = run;
             }
             else
             {
@@ -833,6 +828,95 @@ namespace STS2RitsuMetrics.Ui
 
             _selectedRunDataKey = key;
             return _selectedRunData;
+        }
+
+        private async void BeginSelectedRunLoad(
+            SelectedRunDataKey key,
+            DashboardDataRequirements requirements,
+            HashSet<string>? metricIds,
+            DashboardDataScope scope,
+            bool includeEvents,
+            bool includeTimeline,
+            string? selectedCombatId)
+        {
+            if (_selectedRunLoadKey == key)
+                return;
+
+            var revision = ++_selectedRunLoadRevision;
+            var previousCancellation = _selectedRunLoadCancellation;
+            if (previousCancellation != null)
+                await previousCancellation.CancelAsync();
+            previousCancellation?.Dispose();
+            if (revision != _selectedRunLoadRevision)
+                return;
+            var cancellation = new CancellationTokenSource();
+            _selectedRunLoadCancellation = cancellation;
+            _selectedRunLoadKey = key;
+            _selectedRunData = null;
+            _selectedRunDataKey = null;
+            _status.Text = ModLocalization.Get("analysis.loadingHistory", "Loading selected combat history…");
+            try
+            {
+                var run = await MetricsRepository.GetSavedRunAsync(
+                    key.RunId,
+                    includeEvents,
+                    includeTimeline,
+                    selectedCombatId,
+                    cancellation.Token);
+                if (!IsInsideTree() || !Visible || revision != _selectedRunLoadRevision ||
+                    _selectedRunLoadKey != key)
+                    return;
+
+                if (run != null)
+                {
+                    run = AnalysisSnapshotSelector.Select(
+                        run,
+                        scope,
+                        requirements.Components,
+                        key.CombatId);
+                    run = DashboardSnapshotProjector.Project(run, metricIds);
+                }
+
+                _selectedRunLoadKey = null;
+                _selectedRunLoadCancellation?.Dispose();
+                _selectedRunLoadCancellation = null;
+                _selectedRunData = run == null ? null : LocalizedSnapshotResolver.Resolve(run);
+                _selectedRunDataKey = key;
+                _selectedRunAggregateCache.Reset();
+                _status.Text = run == null
+                    ? ModLocalization.Get("analysis.loadHistoryFailed", "Could not load the selected combat history.")
+                    : string.Empty;
+                MarkDirty();
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer selection superseded this read.
+            }
+            catch (Exception exception)
+            {
+                if (!IsInsideTree() || revision != _selectedRunLoadRevision || _selectedRunLoadKey != key)
+                    return;
+                _selectedRunLoadKey = null;
+                _selectedRunLoadCancellation?.Dispose();
+                _selectedRunLoadCancellation = null;
+                _selectedRunDataKey = key;
+                _status.Text = ModLocalization.Get("analysis.loadHistoryFailed",
+                    "Could not load the selected combat history.");
+                Main.Logger.Error($"Analysis center could not load selected history: {exception}");
+                MarkDirty();
+            }
+        }
+
+        private void InvalidateSelectedRunData()
+        {
+            _selectedRunData = null;
+            _selectedRunDataKey = null;
+            _selectedRunLoadCancellation?.Cancel();
+            _selectedRunLoadCancellation?.Dispose();
+            _selectedRunLoadCancellation = null;
+            _selectedRunLoadKey = null;
+            _selectedRunLoadRevision++;
+            _selectedRunAggregateCache.Reset();
         }
 
         private CombatSnapshot? SelectedSnapshot()

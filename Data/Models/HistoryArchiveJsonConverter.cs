@@ -210,6 +210,20 @@ namespace STS2RitsuMetrics.Data.Models
             }
         }
 
+        internal static HistoryArchive ReadFileArchive(
+            string indexJson,
+            JsonSerializerOptions options,
+            string dataDirectory)
+        {
+            using var document = JsonDocument.Parse(indexJson);
+            var index = document.RootElement.Deserialize<FileArchiveIndex>(GetCompactOptions(options))
+                        ?? throw new JsonException("History archive index is empty.");
+            // ReSharper disable once ConvertIfStatementToReturnStatement
+            if (index.StorageFormat != HistoryArchive.CurrentStorageFormat)
+                throw new JsonException($"Unsupported history storage format '{index.StorageFormat}'.");
+            return CreateFileArchive(index, options, dataDirectory);
+        }
+
         private static HistoryArchive ReadFileIndex(JsonElement root, JsonSerializerOptions options)
         {
             var index = root.Deserialize<FileArchiveIndex>(GetCompactOptions(options))
@@ -218,17 +232,39 @@ namespace STS2RitsuMetrics.Data.Models
                                      && TryRecoverEmptyIndex(options, out var recovered))
                 return recovered;
 
+            if (index.Runs.Sum(run => run.Combats.Count) == 0)
+                return CreateFileArchive(index, options, null);
+
+            var profileId = ProfileManager.Instance.CurrentProfileId;
+            var archive = CreateFileArchive(index, options, GetDataDirectory(profileId < 0 ? 1 : profileId));
+            var combatCount = index.Runs.Sum(run => run.Combats.Count);
+            var storedBytes = index.Runs.Sum(run => run.Combats.Sum(combat => (long)combat.StoredLength));
+            var uncompressedBytes =
+                index.Runs.Sum(run => run.Combats.Sum(combat => (long)combat.UncompressedLength));
+            Main.Logger.Info(
+                $"Analytics history index ready for on-demand loading: runs={index.Runs.Count}, " +
+                $"combats={combatCount}, combat_file_bytes={storedBytes}, " +
+                $"combat_json_bytes={uncompressedBytes}.");
+            return archive;
+        }
+
+        private static HistoryArchive CreateFileArchive(
+            FileArchiveIndex index,
+            JsonSerializerOptions options,
+            string? dataDirectory)
+        {
+            var loader = new FileCombatLoader(options);
             var archive = new HistoryArchive
             {
                 DataVersion = index.DataVersion,
-                Runs = CreateIndexStubs(index),
+                Runs = CreateIndexStubs(index, loader),
             };
             if (index.Runs.Sum(run => run.Combats.Count) == 0)
                 return archive;
 
-            var profileId = ProfileManager.Instance.CurrentProfileId;
-            var dataDirectory = GetDataDirectory(profileId < 0 ? 1 : profileId);
-            archive.AttachPendingLoad(Task.Run(() => LoadCombatFiles(index, options, dataDirectory)));
+            loader.SetDataDirectory(dataDirectory
+                                    ?? throw new JsonException("Analytics history data directory is unavailable."));
+            archive.AttachCombatLoader(loader.Load);
             return archive;
         }
 
@@ -280,7 +316,7 @@ namespace STS2RitsuMetrics.Data.Models
             return false;
         }
 
-        private static List<RunSnapshot> CreateIndexStubs(FileArchiveIndex index)
+        private static List<RunSnapshot> CreateIndexStubs(FileArchiveIndex index, FileCombatLoader loader)
         {
             var runs = new List<RunSnapshot>(index.Runs.Count);
             foreach (var storedRun in index.Runs)
@@ -311,6 +347,7 @@ namespace STS2RitsuMetrics.Data.Models
                             null,
                             reference.StoredLength,
                             reference.FileName));
+                    loader.Add(storedRun.RunId, combat, reference);
                     combats.Add(combat);
                 }
 
@@ -318,47 +355,6 @@ namespace STS2RitsuMetrics.Data.Models
             }
 
             return runs;
-        }
-
-        private static HistoryArchive LoadCombatFiles(FileArchiveIndex index, JsonSerializerOptions options,
-            string dataDirectory)
-        {
-            var runs = new List<RunSnapshot>(index.Runs.Count);
-            var requiresRewrite = false;
-            foreach (var storedRun in index.Runs)
-            {
-                var combats = new List<CombatSnapshot>(storedRun.Combats.Count);
-                foreach (var reference in storedRun.Combats)
-                    try
-                    {
-                        ValidateFileReference(storedRun.RunId, reference);
-                        var stored = ReadCombatFile(Path.Combine(dataDirectory, reference.FileName), reference);
-                        var payload = Decode(stored);
-                        var combat = JsonSerializer.Deserialize<CombatSnapshot>(payload, GetCompactOptions(options))
-                                     ?? throw new JsonException("History combat payload is empty.");
-                        if (!string.Equals(combat.CombatId, reference.CombatId, StringComparison.Ordinal)
-                            || !string.Equals(combat.RunId, storedRun.RunId, StringComparison.Ordinal))
-                            throw new JsonException("History combat payload identity does not match its index.");
-                        CachePreparedCombat(storedRun.RunId, combat, stored);
-                        combats.Add(combat);
-                    }
-                    catch (Exception exception)
-                    {
-                        requiresRewrite = true;
-                        Main.Logger.Error(
-                            $"Skipping unreadable analytics combat '{reference.CombatId}' from run " +
-                            $"'{storedRun.RunId}': {exception.Message}");
-                    }
-
-                runs.Add(CreateRun(storedRun, combats));
-            }
-
-            return new()
-            {
-                DataVersion = index.DataVersion,
-                Runs = runs,
-                RequiresStorageRewrite = requiresRewrite,
-            };
         }
 
         private static HistoryArchive ReadSegmentedAsynchronously(JsonElement root, JsonSerializerOptions options)
@@ -438,6 +434,8 @@ namespace STS2RitsuMetrics.Data.Models
         private static StoredCombat GetOrCreateStoredCombat(string runId, CombatSnapshot combat,
             JsonSerializerOptions options)
         {
+            if (CombatReferenceCache.TryGetValue(combat, out var referenced))
+                return referenced;
             if (TryGetPreparedCombat(runId, combat, out var cached) && cached.Payload != null)
                 return cached;
 
@@ -716,6 +714,73 @@ namespace STS2RitsuMetrics.Data.Models
             DateTimeOffset? EndedAtUtc,
             bool Completed,
             int RoundCount);
+
+        private sealed class FileCombatLoader(JsonSerializerOptions options)
+        {
+            private readonly Dictionary<CombatStorageKey, IndexedCombat> _entries = [];
+            private readonly Lock _failureGate = new();
+            private readonly HashSet<CombatStorageKey> _failures = [];
+            private readonly Lock _loadGate = new();
+            private readonly JsonSerializerOptions _options = GetCompactOptions(options);
+            private string? _dataDirectory;
+
+            internal void Add(string runId, CombatSnapshot stub, CombatFileReference reference)
+            {
+                _entries.Add(new(runId, reference.CombatId), new(stub, reference));
+            }
+
+            internal CombatSnapshot Load(CombatSnapshot combat)
+            {
+                lock (_loadGate)
+                {
+                    return LoadCore(combat);
+                }
+            }
+
+            private CombatSnapshot LoadCore(CombatSnapshot combat)
+            {
+                var key = new CombatStorageKey(combat.RunId, combat.CombatId);
+                if (!_entries.TryGetValue(key, out var indexed) || !ReferenceEquals(indexed.Stub, combat))
+                    return combat;
+
+                try
+                {
+                    var dataDirectory = _dataDirectory
+                                        ?? throw new InvalidOperationException(
+                                            "Analytics history data directory is unavailable.");
+                    var stored = ReadCombatFile(
+                        Path.Combine(dataDirectory, indexed.Reference.FileName),
+                        indexed.Reference);
+                    var loaded = JsonSerializer.Deserialize<CombatSnapshot>(Decode(stored), _options)
+                                 ?? throw new JsonException("History combat payload is empty.");
+                    if (!string.Equals(loaded.CombatId, indexed.Reference.CombatId, StringComparison.Ordinal)
+                        || !string.Equals(loaded.RunId, combat.RunId, StringComparison.Ordinal))
+                        throw new JsonException("History combat payload identity does not match its index.");
+
+                    CachePreparedCombat(combat.RunId, loaded, stored with { Payload = null });
+                    return loaded;
+                }
+                catch (Exception exception)
+                {
+                    lock (_failureGate)
+                    {
+                        if (_failures.Add(key))
+                            Main.Logger.Error(
+                                $"Could not load analytics combat '{combat.CombatId}' from run " +
+                                $"'{combat.RunId}': {exception}");
+                    }
+
+                    return combat;
+                }
+            }
+
+            internal void SetDataDirectory(string dataDirectory)
+            {
+                _dataDirectory = dataDirectory;
+            }
+
+            private sealed record IndexedCombat(CombatSnapshot Stub, CombatFileReference Reference);
+        }
 
         private sealed class SegmentedArchive
         {
