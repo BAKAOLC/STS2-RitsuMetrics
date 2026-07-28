@@ -266,7 +266,7 @@ namespace STS2RitsuMetrics.Data.Models
 
             loader.SetDataDirectory(dataDirectory
                                     ?? throw new JsonException("Analytics history data directory is unavailable."));
-            archive.AttachCombatLoader(loader.Load, loader.LoadSummary);
+            archive.AttachCombatLoader(loader.Load, loader.LoadSummary, loader.ReplaceStub);
             return archive;
         }
 
@@ -748,6 +748,21 @@ namespace STS2RitsuMetrics.Data.Models
                 lock (_loadGate)
                 {
                     return LoadSummaryCore(combat);
+                }
+            }
+
+            internal void ReplaceStub(CombatSnapshot previous, CombatSnapshot replacement)
+            {
+                lock (_loadGate)
+                {
+                    var key = new CombatStorageKey(previous.RunId, previous.CombatId);
+                    if (!_entries.TryGetValue(key, out var indexed) ||
+                        !ReferenceEquals(indexed.Stub, previous))
+                        return;
+
+                    _entries[key] = indexed with { Stub = replacement };
+                    if (CombatReferenceCache.TryGetValue(previous, out var stored))
+                        CachePreparedCombat(previous.RunId, replacement, stored);
                 }
             }
 

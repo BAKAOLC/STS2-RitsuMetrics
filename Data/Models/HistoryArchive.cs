@@ -15,6 +15,7 @@ namespace STS2RitsuMetrics.Data.Models
         private readonly Lock _gate = new();
         private readonly HashSet<string> _mutatedRunIds = new(StringComparer.Ordinal);
         private Func<CombatSnapshot, CombatSnapshot>? _combatLoader;
+        private Action<CombatSnapshot, CombatSnapshot>? _combatStubReplaced;
         private Func<CombatSnapshot, CombatSnapshot>? _combatSummaryLoader;
         private bool _discardPendingRuns;
         private Action? _loadCompleted;
@@ -75,12 +76,14 @@ namespace STS2RitsuMetrics.Data.Models
 
         internal void AttachCombatLoader(
             Func<CombatSnapshot, CombatSnapshot> combatLoader,
-            Func<CombatSnapshot, CombatSnapshot>? combatSummaryLoader = null)
+            Func<CombatSnapshot, CombatSnapshot>? combatSummaryLoader = null,
+            Action<CombatSnapshot, CombatSnapshot>? combatStubReplaced = null)
         {
             lock (_gate)
             {
                 _combatLoader = combatLoader;
                 _combatSummaryLoader = combatSummaryLoader;
+                _combatStubReplaced = combatStubReplaced;
             }
         }
 
@@ -117,31 +120,89 @@ namespace STS2RitsuMetrics.Data.Models
 
         internal RunSnapshot? MaterializeRunSummary(
             string runId,
+            out bool cacheChanged,
             CancellationToken cancellationToken = default)
         {
             CompletePendingLoadIfReady();
             RunSnapshot? run;
             Func<CombatSnapshot, CombatSnapshot>? summaryLoader;
+            Action<CombatSnapshot, CombatSnapshot>? stubReplaced;
             lock (_gate)
             {
                 run = _runs.LastOrDefault(candidate => candidate.RunId == runId);
                 summaryLoader = _combatSummaryLoader ?? _combatLoader;
+                stubReplaced = _combatStubReplaced;
             }
 
+            cacheChanged = false;
             if (run == null)
                 return null;
 
             var combats = new List<CombatSnapshot>(run.Combats.Count);
+            var loadedSummaries = new Dictionary<string, CombatSnapshot>(StringComparer.Ordinal);
             foreach (var combat in run.Combats)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var materialized = combat.Players.Count > 0
                     ? combat
                     : summaryLoader?.Invoke(combat) ?? combat;
-                combats.Add(AnalysisSnapshotSelector.SummarizeCombat(materialized));
+                var summary = AnalysisSnapshotSelector.SummarizeCombat(materialized);
+                combats.Add(summary);
+                if (combat.Players.Count == 0 && summary.Players.Count > 0)
+                    loadedSummaries[combat.CombatId] = summary;
             }
 
-            return run with { Combats = combats };
+            if (loadedSummaries.Count == 0)
+                return run with { Combats = combats };
+
+            lock (_gate)
+            {
+                var runIndex = _runs.FindLastIndex(candidate => candidate.RunId == runId);
+                if (runIndex < 0)
+                    return run with { Combats = combats };
+
+                var current = _runs[runIndex];
+                var changed = false;
+                var cachedCombats = current.Combats.Select(combat =>
+                {
+                    if (combat.Players.Count > 0 ||
+                        !loadedSummaries.TryGetValue(combat.CombatId, out var summary))
+                        return combat;
+                    stubReplaced?.Invoke(combat, summary);
+                    changed = true;
+                    return summary;
+                }).ToList();
+                if (!changed)
+                    return current with
+                    {
+                        Combats = current.Combats.Select(AnalysisSnapshotSelector.SummarizeCombat).ToArray(),
+                    };
+
+                var cached = current with { Combats = cachedCombats };
+                _runs[runIndex] = cached;
+                _mutatedRunIds.Add(runId);
+                cacheChanged = true;
+                return cached;
+            }
+        }
+
+        internal RunSnapshot? MaterializeRunSummary(
+            string runId,
+            CancellationToken cancellationToken = default)
+        {
+            return MaterializeRunSummary(runId, out _, cancellationToken);
+        }
+
+        internal IReadOnlyList<string> GetRunIdsMissingSummaries()
+        {
+            CompletePendingLoadIfReady();
+            lock (_gate)
+            {
+                return _runs
+                    .Where(run => run.Combats.Any(combat => combat.Players.Count == 0))
+                    .Select(run => run.RunId)
+                    .ToArray();
+            }
         }
 
         internal void SetLoadCompletionCallback(Action callback)
@@ -197,6 +258,7 @@ namespace STS2RitsuMetrics.Data.Models
                 _runs.Clear();
                 _combatLoader = null;
                 _combatSummaryLoader = null;
+                _combatStubReplaced = null;
             }
         }
 
@@ -296,6 +358,7 @@ namespace STS2RitsuMetrics.Data.Models
                 _runs = mergedRuns.OrderBy(run => run.StartedAtUtc).ToList();
                 _combatLoader = loaded._combatLoader;
                 _combatSummaryLoader = loaded._combatSummaryLoader;
+                _combatStubReplaced = loaded._combatStubReplaced;
                 RequiresStorageRewrite |= loaded.RequiresStorageRewrite;
                 _pendingLoad = null;
                 _loadFailure = null;

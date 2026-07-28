@@ -11,6 +11,8 @@ namespace STS2RitsuMetrics.Core
     internal sealed class MetricsRepository
     {
         private static readonly SemaphoreSlim SavedRunReadGate = new(1, 1);
+        private static readonly Lock SummaryMigrationGate = new();
+        private static CancellationTokenSource? _summaryMigrationCancellation;
         private static int _historyReadFailureLogged;
         private readonly Lock _gate = new();
         private MutableRunSession? _liveRun;
@@ -244,9 +246,12 @@ namespace STS2RitsuMetrics.Core
             await SavedRunReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                var cacheChanged = false;
                 var run = await Task.Run(
-                    () => history.MaterializeRunSummary(runId, cancellationToken),
+                    () => history.MaterializeRunSummary(runId, out cacheChanged, cancellationToken),
                     cancellationToken).ConfigureAwait(false);
+                if (cacheChanged)
+                    ModData.QueueHistoryCacheWrite(history, "sidebar summary cache");
                 stopwatch.Stop();
                 var message =
                     $"Loaded analytics sidebar summaries: run='{LogId(runId)}', " +
@@ -260,6 +265,94 @@ namespace STS2RitsuMetrics.Core
             finally
             {
                 SavedRunReadGate.Release();
+            }
+        }
+
+        internal static void QueueHistorySummaryMigration()
+        {
+            var history = ModData.History;
+            var runIds = history.GetRunIdsMissingSummaries();
+            lock (SummaryMigrationGate)
+            {
+                _summaryMigrationCancellation?.Cancel();
+                _summaryMigrationCancellation = null;
+                if (runIds.Count == 0)
+                    return;
+
+                var cancellation = new CancellationTokenSource();
+                _summaryMigrationCancellation = cancellation;
+                var worker = new Thread(() => MigrateHistorySummaries(history, runIds, cancellation))
+                {
+                    IsBackground = true,
+                    Name = "RitsuMetrics history summary migration",
+                };
+                try
+                {
+                    worker.Priority = ThreadPriority.BelowNormal;
+                }
+                catch (Exception)
+                {
+                    // Some mobile runtimes do not expose thread priorities.
+                }
+
+                worker.Start();
+            }
+        }
+
+        private static void MigrateHistorySummaries(
+            HistoryArchive history,
+            IReadOnlyList<string> runIds,
+            CancellationTokenSource cancellation)
+        {
+            var convertedRuns = 0;
+            var token = cancellation.Token;
+            try
+            {
+                Main.Logger.Debug(
+                    $"Background analytics sidebar migration started: runs={runIds.Count}.");
+                foreach (var runId in runIds)
+                {
+                    token.ThrowIfCancellationRequested();
+                    SavedRunReadGate.Wait(token);
+                    try
+                    {
+                        history.MaterializeRunSummary(runId, out var changed, token);
+                        if (changed)
+                            convertedRuns++;
+                    }
+                    finally
+                    {
+                        SavedRunReadGate.Release();
+                    }
+
+                    Thread.Yield();
+                }
+
+                if (convertedRuns > 0)
+                    Main.Logger.Info(
+                        $"Background analytics sidebar migration completed: runs={convertedRuns}.");
+            }
+            catch (OperationCanceledException)
+            {
+                Main.Logger.Debug(
+                    $"Background analytics sidebar migration stopped after {convertedRuns} run(s).");
+            }
+            catch (Exception exception)
+            {
+                Main.Logger.Error(
+                    $"Background analytics sidebar migration failed after {convertedRuns} run(s): {exception}");
+            }
+            finally
+            {
+                if (convertedRuns > 0)
+                    ModData.QueueHistoryCacheWrite(history, "background sidebar summary migration");
+                lock (SummaryMigrationGate)
+                {
+                    if (ReferenceEquals(_summaryMigrationCancellation, cancellation))
+                        _summaryMigrationCancellation = null;
+                }
+
+                cancellation.Dispose();
             }
         }
 

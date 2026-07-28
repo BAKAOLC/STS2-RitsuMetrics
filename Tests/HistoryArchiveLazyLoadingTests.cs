@@ -61,8 +61,9 @@ namespace STS2RitsuMetrics.Tests
                 Assert.Single(archive.Runs.Single().Combats[0].Players);
                 Assert.Empty(archive.Runs.Single().Combats[1].Players);
 
-                var summaries = archive.MaterializeRunSummary("run");
+                var summaries = archive.MaterializeRunSummary("run", out var cacheChanged);
 
+                Assert.True(cacheChanged);
                 Assert.Equal(2, summaries!.Combats.Count);
                 foreach (var summary in summaries.Combats)
                 {
@@ -72,7 +73,15 @@ namespace STS2RitsuMetrics.Tests
                     Assert.Empty(summary.Timeline!);
                 }
 
-                Assert.Empty(archive.Runs.Single().Combats[1].Players);
+                Assert.Single(archive.Runs.Single().Combats[1].Players);
+                File.Delete(notRequestedPath);
+
+                var cachedSummaries = archive.MaterializeRunSummary("run", out cacheChanged);
+
+                Assert.False(cacheChanged);
+                Assert.Equal(2, cachedSummaries!.Combats.Count);
+                Assert.All(cachedSummaries.Combats, summary => Assert.Single(summary.Players));
+                File.WriteAllBytes(notRequestedPath, notRequestedFile);
 
                 var materialized = archive.MaterializeRun("run", true, true, "loaded");
 
@@ -80,14 +89,20 @@ namespace STS2RitsuMetrics.Tests
                 Assert.Equal("loaded", selected.CombatId);
                 Assert.Single(selected.Players);
                 Assert.Single(archive.Runs.Single().Combats[0].Players);
-                Assert.Empty(archive.Runs.Single().Combats[1].Players);
+                Assert.Single(archive.Runs.Single().Combats[1].Players);
 
-                HistoryArchiveJsonConverter.PrepareForWrite(
-                    archive.CreatePersistenceSnapshot(),
+                var persistenceSnapshot = archive.CreatePersistenceSnapshot();
+                HistoryArchiveJsonConverter.PrepareForWrite(persistenceSnapshot, options, directory);
+                var persistedIndex = JsonSerializer.Serialize(persistenceSnapshot, options);
+                var reopened = HistoryArchiveJsonConverter.ReadFileArchive(
+                    persistedIndex,
                     options,
                     directory);
 
                 Assert.Equal(notRequestedFile, File.ReadAllBytes(notRequestedPath));
+                Assert.All(
+                    reopened.Runs.Single().Combats,
+                    summary => Assert.Single(summary.Players));
             }
             finally
             {

@@ -8,6 +8,7 @@ using STS2RitsuLib;
 using STS2RitsuLib.Data;
 using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Core;
 using STS2RitsuMetrics.Data.Models;
 
 namespace STS2RitsuMetrics.Data
@@ -120,6 +121,7 @@ namespace STS2RitsuMetrics.Data
                 return;
             _publishedHistoryArchive = history;
             Interlocked.Exchange(ref _publishedHistoryLoadRevision, revision);
+            MetricsRepository.QueueHistorySummaryMigration();
             HistoryReady?.Invoke();
         }
 
@@ -191,6 +193,17 @@ namespace STS2RitsuMetrics.Data
         {
             var profileId = ProfileManager.Instance.CurrentProfileId;
             HistoryPersistenceQueue.Enqueue(history, profileId < 0 ? 1 : profileId, operation);
+        }
+
+        internal static void QueueHistoryCacheWrite(HistoryArchive history, string operation)
+        {
+            _mainThreadContext?.Post(_ =>
+            {
+                if (!ReferenceEquals(history, Store.Get<HistoryArchive>(ModConstants.HistoryKey)))
+                    return;
+                history.RequiresStorageRewrite = false;
+                QueueHistoryWrite(history, operation);
+            }, null);
         }
 
         private static void OnProfileDataReady(ProfileDataReadyEvent evt)
