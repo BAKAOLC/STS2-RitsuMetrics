@@ -7,11 +7,14 @@ namespace STS2RitsuMetrics.Ui
     public sealed partial class DashboardScrollContainer : ScrollContainer
     {
         private readonly MarginContainer _contentHost;
+        private readonly List<Control> _contents = [];
         private readonly VScrollBar _verticalScrollBar;
-
         private int _appliedContentGutter = -1;
         private int _contentGutter = DefaultContentGutter;
+
+        private float _contentMinimumHeight = -1f;
         private bool _layoutRefreshPending;
+        private int _layoutSettlePasses;
         private bool _visibleRangeNotificationPending;
 
         public DashboardScrollContainer()
@@ -30,7 +33,7 @@ namespace STS2RitsuMetrics.Ui
             _verticalScrollBar = GetVScrollBar();
             _verticalScrollBar.VisibilityChanged += UpdateContentGutter;
             _verticalScrollBar.ValueChanged += _ => ScheduleVisibleRangeChanged();
-            Resized += ScheduleVisibleRangeChanged;
+            Resized += OnResized;
             Callable.From(UpdateContentGutter).CallDeferred();
         }
 
@@ -52,12 +55,15 @@ namespace STS2RitsuMetrics.Ui
         public void SetContent(Control content)
         {
             ArgumentNullException.ThrowIfNull(content);
+            _contents.Add(content);
             _contentHost.AddChild(content);
+            content.MinimumSizeChanged += InvalidateContentSize;
             InvalidateContentSize();
         }
 
         public void InvalidateContentSize()
         {
+            _layoutSettlePasses = 2;
             if (_layoutRefreshPending)
                 return;
             _layoutRefreshPending = true;
@@ -70,14 +76,60 @@ namespace STS2RitsuMetrics.Ui
                 return;
             _appliedContentGutter = _contentGutter;
             _contentHost.AddThemeConstantOverride("margin_right", _contentGutter);
+            InvalidateContentSize();
         }
 
         private void RefreshContentLayout()
         {
             _layoutRefreshPending = false;
+            ApplyMeasuredContentHeight();
             _contentHost.QueueSort();
             QueueSort();
-            Callable.From(ClampScrollAfterLayout).CallDeferred();
+            Callable.From(SettleContentLayout).CallDeferred();
+        }
+
+        private void SettleContentLayout()
+        {
+            if (!IsInsideTree())
+                return;
+            if (ApplyMeasuredContentHeight() && _layoutSettlePasses-- > 0)
+            {
+                _contentHost.QueueSort();
+                QueueSort();
+                Callable.From(SettleContentLayout).CallDeferred();
+                return;
+            }
+
+            ClampScrollAfterLayout();
+        }
+
+        private bool ApplyMeasuredContentHeight()
+        {
+            var height = 0f;
+            var measured = false;
+            for (var index = _contents.Count - 1; index >= 0; index--)
+            {
+                var content = _contents[index];
+                if (!IsInstanceValid(content))
+                {
+                    _contents.RemoveAt(index);
+                    continue;
+                }
+
+                if (!content.IsInsideTree())
+                    continue;
+                height = Math.Max(height, content.GetCombinedMinimumSize().Y);
+                measured = true;
+            }
+
+            if (!measured)
+                return false;
+            height = MathF.Ceiling(Math.Max(0f, height));
+            if (Mathf.IsEqualApprox(_contentMinimumHeight, height))
+                return false;
+            _contentMinimumHeight = height;
+            _contentHost.CustomMinimumSize = new(_contentHost.CustomMinimumSize.X, height);
+            return true;
         }
 
         private void ClampScrollAfterLayout()
@@ -85,6 +137,12 @@ namespace STS2RitsuMetrics.Ui
             var maximum = Math.Max(0d, _verticalScrollBar.MaxValue - _verticalScrollBar.Page);
             ScrollVertical = Math.Min(ScrollVertical, (int)Math.Ceiling(maximum));
             UpdateContentGutter();
+            ScheduleVisibleRangeChanged();
+        }
+
+        private void OnResized()
+        {
+            InvalidateContentSize();
             ScheduleVisibleRangeChanged();
         }
 
