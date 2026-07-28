@@ -856,9 +856,7 @@ namespace STS2RitsuMetrics.Ui
         protected static void ApplyIdentityColor(Label label, string color)
         {
             label.AddThemeColorOverride("font_color", ColorOf(color));
-            label.AddThemeColorOverride("font_outline_color",
-                ColorOf(PlayerColorPalette.ReadableTextOutline(color)));
-            label.AddThemeConstantOverride("outline_size", 2);
+            label.AddThemeConstantOverride("outline_size", 0);
         }
 
         protected static IReadOnlyList<SourceMetricSnapshot> MetricSourcesForDisplay(

@@ -412,9 +412,7 @@ namespace STS2RitsuMetrics.Ui
             };
             label.AddThemeFontSizeOverride("font_size", DashboardControlTheme.BodyFontSize);
             label.AddThemeColorOverride("font_color", new(color));
-            label.AddThemeColorOverride("font_outline_color",
-                new(PlayerColorPalette.ReadableTextOutline(color)));
-            label.AddThemeConstantOverride("outline_size", 2);
+            label.AddThemeConstantOverride("outline_size", 0);
             return label;
         }
 
