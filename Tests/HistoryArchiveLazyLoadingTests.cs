@@ -47,7 +47,7 @@ namespace STS2RitsuMetrics.Tests
                             Identity = (RunIdentitySnapshot?)null,
                             Combats = new[]
                             {
-                                Reference(combat, loadedFileName, payload.Length),
+                                Reference(combat, loadedFileName, payload.Length, true),
                                 Reference(notRequested, notRequestedFileName, notRequestedPayload.Length),
                             },
                         },
@@ -58,14 +58,29 @@ namespace STS2RitsuMetrics.Tests
 
                 Assert.True(archive.IsLoadReady);
                 Assert.Equal(2, archive.Runs.Single().Combats.Count);
-                Assert.All(archive.Runs.Single().Combats, stub => Assert.Empty(stub.Players));
+                Assert.Single(archive.Runs.Single().Combats[0].Players);
+                Assert.Empty(archive.Runs.Single().Combats[1].Players);
+
+                var summaries = archive.MaterializeRunSummary("run");
+
+                Assert.Equal(2, summaries!.Combats.Count);
+                foreach (var summary in summaries.Combats)
+                {
+                    var player = Assert.Single(summary.Players);
+                    Assert.Equal(42m, player.Totals[MetricIds.DamageDealt]);
+                    Assert.Empty(summary.Events);
+                    Assert.Empty(summary.Timeline!);
+                }
+
+                Assert.Empty(archive.Runs.Single().Combats[1].Players);
 
                 var materialized = archive.MaterializeRun("run", true, true, "loaded");
 
                 var selected = Assert.Single(materialized!.Combats);
                 Assert.Equal("loaded", selected.CombatId);
                 Assert.Single(selected.Players);
-                Assert.All(archive.Runs.Single().Combats, stub => Assert.Empty(stub.Players));
+                Assert.Single(archive.Runs.Single().Combats[0].Players);
+                Assert.Empty(archive.Runs.Single().Combats[1].Players);
 
                 HistoryArchiveJsonConverter.PrepareForWrite(
                     archive.CreatePersistenceSnapshot(),
@@ -112,7 +127,11 @@ namespace STS2RitsuMetrics.Tests
                 new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(StringComparer.Ordinal));
         }
 
-        private static object Reference(CombatSnapshot combat, string fileName, int payloadLength)
+        private static object Reference(
+            CombatSnapshot combat,
+            string fileName,
+            int payloadLength,
+            bool includePlayers = false)
         {
             return new
             {
@@ -129,6 +148,7 @@ namespace STS2RitsuMetrics.Tests
                 combat.EndedAtUtc,
                 combat.Completed,
                 combat.RoundCount,
+                Players = includePlayers ? combat.Players : null,
             };
         }
 

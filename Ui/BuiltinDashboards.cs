@@ -265,8 +265,6 @@ namespace STS2RitsuMetrics.Ui
             CompactSubtitle = null;
             Render(context);
             Rows.CustomMinimumSize = new(Rows.CustomMinimumSize.X, 0f);
-            Rows.ResetSize();
-            Rows.UpdateMinimumSize();
             Scroll.InvalidateContentSize();
         }
 

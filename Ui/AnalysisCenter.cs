@@ -67,6 +67,9 @@ namespace STS2RitsuMetrics.Ui
         private CancellationTokenSource? _selectedRunLoadCancellation;
         private SelectedRunDataKey? _selectedRunLoadKey;
         private int _selectedRunLoadRevision;
+        private CancellationTokenSource? _selectedRunSummaryCancellation;
+        private SelectedRunSummaryKey? _selectedRunSummaryKey;
+        private int _selectedRunSummaryRevision;
         private Label _selectionMeta = null!;
         private Label _selectionTitle = null!;
         private Label _status = null!;
@@ -123,6 +126,7 @@ namespace STS2RitsuMetrics.Ui
             Hide();
             DisposeRenderer();
             InvalidateSelectedRunData();
+            CancelSelectedRunSummaryLoad();
         }
 
         internal void OpenCurrentRunOverview()
@@ -175,8 +179,20 @@ namespace STS2RitsuMetrics.Ui
         internal void HistoryLoaded()
         {
             _historyLoadRevision = ModData.HistoryLoadRevision;
+            InvalidateSelectedRunData();
+            CancelSelectedRunSummaryLoad();
             if (Visible)
+            {
                 ReloadRuns();
+                return;
+            }
+
+            _runs = [];
+            _activeRunId = null;
+            _selectedRunId = null;
+            _selectedCombatId = null;
+            _expandedRunIds.Clear();
+            _combatSearchText.Clear();
         }
 
         internal void DisposeRenderer()
@@ -577,6 +593,7 @@ namespace STS2RitsuMetrics.Ui
 
         private void SelectRun(string runId, bool toggleExpansion = false)
         {
+            CancelSelectedRunSummaryLoad(runId);
             var alreadySelected = runId == _selectedRunId && _scope.Selected == 1;
             _selectedRunId = runId;
             if (toggleExpansion && alreadySelected && _expandedRunIds.Remove(runId))
@@ -598,6 +615,7 @@ namespace STS2RitsuMetrics.Ui
 
         private void SelectCombat(string runId, string combatId)
         {
+            CancelSelectedRunSummaryLoad(runId);
             _selectedRunId = runId;
             _selectedCombatId = combatId;
             _expandedRunIds.Clear();
@@ -776,7 +794,8 @@ namespace STS2RitsuMetrics.Ui
                 _selectedCombatId,
                 _scope.Selected,
                 requirements.Components,
-                metricSelectionKey);
+                metricSelectionKey,
+                ModData.HistoryGeneration);
             if (_selectedRunDataKey == key)
                 return _selectedRunData;
 
@@ -844,11 +863,9 @@ namespace STS2RitsuMetrics.Ui
 
             var revision = ++_selectedRunLoadRevision;
             var previousCancellation = _selectedRunLoadCancellation;
-            if (previousCancellation != null)
-                await previousCancellation.CancelAsync();
+            // ReSharper disable once MethodHasAsyncOverload
+            previousCancellation?.Cancel();
             previousCancellation?.Dispose();
-            if (revision != _selectedRunLoadRevision)
-                return;
             var cancellation = new CancellationTokenSource();
             _selectedRunLoadCancellation = cancellation;
             _selectedRunLoadKey = key;
@@ -864,7 +881,7 @@ namespace STS2RitsuMetrics.Ui
                     selectedCombatId,
                     cancellation.Token);
                 if (!IsInsideTree() || !Visible || revision != _selectedRunLoadRevision ||
-                    _selectedRunLoadKey != key)
+                    _selectedRunLoadKey != key || key.HistoryGeneration != ModData.HistoryGeneration)
                     return;
 
                 if (run != null)
@@ -882,6 +899,12 @@ namespace STS2RitsuMetrics.Ui
                 _selectedRunLoadCancellation = null;
                 _selectedRunData = run == null ? null : LocalizedSnapshotResolver.Resolve(run);
                 _selectedRunDataKey = key;
+                if (_selectedRunData != null)
+                {
+                    MergeLoadedSummary(_selectedRunData);
+                    BeginSelectedRunSummaryLoad(key.RunId, key.HistoryGeneration);
+                }
+
                 _selectedRunAggregateCache.Reset();
                 _status.Text = run == null
                     ? ModLocalization.Get("analysis.loadHistoryFailed", "Could not load the selected combat history.")
@@ -917,6 +940,93 @@ namespace STS2RitsuMetrics.Ui
             _selectedRunLoadKey = null;
             _selectedRunLoadRevision++;
             _selectedRunAggregateCache.Reset();
+        }
+
+        private void MergeLoadedSummary(RunSnapshot loaded)
+        {
+            var runIndex = Array.FindIndex(_runs, run => run.RunId == loaded.RunId);
+            if (runIndex < 0 || loaded.Combats.Count == 0)
+                return;
+
+            var summaries = loaded.Combats
+                .Select(AnalysisSnapshotSelector.SummarizeCombat)
+                .ToDictionary(combat => combat.CombatId, StringComparer.Ordinal);
+            var existing = _runs[runIndex];
+            var changed = false;
+            var combats = existing.Combats.Select(combat =>
+            {
+                if (!summaries.TryGetValue(combat.CombatId, out var summary))
+                    return combat;
+                changed |= combat.Players.Count == 0 && summary.Players.Count > 0;
+                return summary;
+            }).ToArray();
+            if (!changed)
+                return;
+
+            _runs[runIndex] = existing with { Combats = combats };
+            _historyRevision++;
+            RebuildSearchIndex();
+            _historyHash = 0;
+        }
+
+        private async void BeginSelectedRunSummaryLoad(string runId, long historyGeneration)
+        {
+            var run = _runs.FirstOrDefault(candidate => candidate.RunId == runId);
+            if (run == null || run.Combats.All(combat => combat.Players.Count > 0))
+                return;
+
+            var key = new SelectedRunSummaryKey(runId, historyGeneration);
+            if (_selectedRunSummaryKey == key)
+                return;
+
+            var revision = ++_selectedRunSummaryRevision;
+            // ReSharper disable once MethodHasAsyncOverload
+            _selectedRunSummaryCancellation?.Cancel();
+            _selectedRunSummaryCancellation?.Dispose();
+            var cancellation = new CancellationTokenSource();
+            _selectedRunSummaryCancellation = cancellation;
+            _selectedRunSummaryKey = key;
+            try
+            {
+                var summaries = await MetricsRepository.GetSavedRunSummaryAsync(runId, cancellation.Token);
+                if (!IsInsideTree() || !Visible || revision != _selectedRunSummaryRevision ||
+                    _selectedRunSummaryKey != key || historyGeneration != ModData.HistoryGeneration)
+                    return;
+
+                _selectedRunSummaryKey = null;
+                _selectedRunSummaryCancellation?.Dispose();
+                _selectedRunSummaryCancellation = null;
+                if (summaries == null)
+                    return;
+
+                MergeLoadedSummary(LocalizedSnapshotResolver.Resolve(summaries));
+                RefreshHistoryIfNeeded();
+            }
+            catch (OperationCanceledException)
+            {
+                // A different run or history profile superseded this sidebar read.
+            }
+            catch (Exception exception)
+            {
+                if (revision != _selectedRunSummaryRevision || _selectedRunSummaryKey != key)
+                    return;
+                _selectedRunSummaryKey = null;
+                _selectedRunSummaryCancellation?.Dispose();
+                _selectedRunSummaryCancellation = null;
+                Main.Logger.Error($"Analysis center could not load run sidebar summaries: {exception}");
+            }
+        }
+
+        private void CancelSelectedRunSummaryLoad(string? retainedRunId = null)
+        {
+            if (retainedRunId != null && _selectedRunSummaryKey is { RunId: var runId } &&
+                string.Equals(runId, retainedRunId, StringComparison.Ordinal))
+                return;
+            _selectedRunSummaryCancellation?.Cancel();
+            _selectedRunSummaryCancellation?.Dispose();
+            _selectedRunSummaryCancellation = null;
+            _selectedRunSummaryKey = null;
+            _selectedRunSummaryRevision++;
         }
 
         private CombatSnapshot? SelectedSnapshot()
@@ -1129,6 +1239,9 @@ namespace STS2RitsuMetrics.Ui
             string? CombatId,
             int Scope,
             DashboardDataComponents Components,
-            string MetricSelectionKey);
+            string MetricSelectionKey,
+            long HistoryGeneration);
+
+        private readonly record struct SelectedRunSummaryKey(string RunId, long HistoryGeneration);
     }
 }

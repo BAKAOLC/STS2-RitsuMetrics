@@ -420,8 +420,10 @@ namespace STS2RitsuMetrics.Ui
 
         private static Button HistoryCombatButton(CombatSnapshot combat, int number, bool selected)
         {
+            var hasSummary = combat.Players.Count > 0;
             var totalDamage = combat.Players.Sum(player =>
                 player.Totals.GetValueOrDefault(MetricIds.DamageDealt));
+            var damageText = hasSummary ? Format(totalDamage) : "—";
             var encounter = string.IsNullOrWhiteSpace(combat.EncounterName)
                 ? combat.EncounterId
                 : combat.EncounterName;
@@ -432,7 +434,7 @@ namespace STS2RitsuMetrics.Ui
                 FocusMode = FocusModeEnum.None,
                 TooltipText = ModLocalization.Format("analysis.combatTooltip",
                     "Combat {0} · Act {1}, floor {2} · {3} rounds · {4} damage", number,
-                    combat.ActIndex + 1, combat.Floor, combat.RoundCount, Format(totalDamage)),
+                    combat.ActIndex + 1, combat.Floor, combat.RoundCount, damageText),
             };
             DashboardControlTheme.ApplyButton(button,
                 selected ? DashboardButtonKind.Primary : DashboardButtonKind.Subtle, true);
@@ -496,7 +498,7 @@ namespace STS2RitsuMetrics.Ui
             amount.AddThemeConstantOverride("separation", -5);
             var value = new Label
             {
-                Text = Format(totalDamage),
+                Text = damageText,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 MouseFilter = MouseFilterEnum.Ignore,
             };

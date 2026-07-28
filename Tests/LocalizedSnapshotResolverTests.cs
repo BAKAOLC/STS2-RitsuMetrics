@@ -8,7 +8,7 @@ namespace STS2RitsuMetrics.Tests
     public sealed class LocalizedSnapshotResolverTests
     {
         [Fact]
-        public void ResolveDoesNotReuseGloballyCachedHistoricalProjection()
+        public void ResolveDoesNotCacheRunProjectionAndReusesUnchangedCombatData()
         {
             var combat = new CombatSnapshot(
                 "run",
@@ -38,7 +38,8 @@ namespace STS2RitsuMetrics.Tests
             var second = LocalizedSnapshotResolver.Resolve(run);
 
             Assert.NotSame(first, second);
-            Assert.NotSame(first.Combats[0], second.Combats[0]);
+            Assert.Same(combat, first.Combats[0]);
+            Assert.Same(combat, second.Combats[0]);
         }
     }
 }

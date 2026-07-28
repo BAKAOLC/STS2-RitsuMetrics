@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+using System.Diagnostics;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Data;
 using STS2RitsuMetrics.Data.Models;
@@ -197,10 +198,15 @@ namespace STS2RitsuMetrics.Core
             CancellationToken cancellationToken)
         {
             var history = ModData.History;
+            var stopwatch = Stopwatch.StartNew();
+            Main.Logger.Debug(
+                $"Loading analytics history selection: run='{LogId(runId)}', " +
+                $"combat='{(selectedCombatId == null ? "<all>" : LogId(selectedCombatId))}', " +
+                $"events={includeEvents}, timeline={includeTimeline}.");
             await SavedRunReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                return await Task.Run(() =>
+                var run = await Task.Run(() =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var run = ReadSavedRun(
@@ -213,6 +219,43 @@ namespace STS2RitsuMetrics.Core
                     cancellationToken.ThrowIfCancellationRequested();
                     return run;
                 }, cancellationToken).ConfigureAwait(false);
+                stopwatch.Stop();
+                var message =
+                    $"Loaded analytics history selection: run='{LogId(runId)}', combats={run?.Combats.Count ?? 0}, " +
+                    $"elapsed_ms={stopwatch.ElapsedMilliseconds}.";
+                if (stopwatch.ElapsedMilliseconds >= 1000)
+                    Main.Logger.Info(message);
+                else
+                    Main.Logger.Debug(message);
+                return run;
+            }
+            finally
+            {
+                SavedRunReadGate.Release();
+            }
+        }
+
+        internal static async Task<RunSnapshot?> GetSavedRunSummaryAsync(
+            string runId,
+            CancellationToken cancellationToken)
+        {
+            var history = ModData.History;
+            var stopwatch = Stopwatch.StartNew();
+            await SavedRunReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var run = await Task.Run(
+                    () => history.MaterializeRunSummary(runId, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+                stopwatch.Stop();
+                var message =
+                    $"Loaded analytics sidebar summaries: run='{LogId(runId)}', " +
+                    $"combats={run?.Combats.Count ?? 0}, elapsed_ms={stopwatch.ElapsedMilliseconds}.";
+                if (stopwatch.ElapsedMilliseconds >= 1000)
+                    Main.Logger.Info(message);
+                else
+                    Main.Logger.Debug(message);
+                return run;
             }
             finally
             {

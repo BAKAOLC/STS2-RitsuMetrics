@@ -26,12 +26,15 @@ namespace STS2RitsuMetrics.Data
         };
 
         private static HistoryArchive? _publishedHistoryArchive;
+        private static long _historyGeneration;
         private static long _publishedHistoryLoadRevision;
         private static SynchronizationContext? _mainThreadContext;
 
         internal static ModSettings Settings => Store.Get<ModSettings>(ModConstants.SettingsKey);
 
         internal static long HistoryLoadRevision => History.LoadRevision;
+
+        internal static long HistoryGeneration => Interlocked.Read(ref _historyGeneration);
 
         internal static bool IsHistoryReady => History.IsLoadReady;
 
@@ -132,6 +135,26 @@ namespace STS2RitsuMetrics.Data
             context.Post(static _ => PumpHistoryLoad(), null);
         }
 
+        private static void QueueProfileHistoryReady(int profileId, bool removeLegacyCloudHistory)
+        {
+            Interlocked.Increment(ref _historyGeneration);
+            _publishedHistoryArchive = null;
+            Interlocked.Exchange(ref _publishedHistoryLoadRevision, -1);
+            var context = _mainThreadContext;
+            if (context == null)
+            {
+                Main.Logger.Error("Profile history changed without a main-thread synchronization context.");
+                return;
+            }
+
+            context.Post(_ =>
+            {
+                if (removeLegacyCloudHistory)
+                    DeleteLegacyCloudHistory(profileId);
+                PumpHistoryLoad();
+            }, null);
+        }
+
         internal static void OnHistoryWriteCompleted(
             int profileId,
             HistoryArchive archive,
@@ -174,15 +197,19 @@ namespace STS2RitsuMetrics.Data
         {
             if (Store.HasExistingData(ModConstants.HistoryKey))
             {
-                Callable.From(() => DeleteLegacyCloudHistory(evt.ProfileId)).CallDeferred();
+                QueueProfileHistoryReady(evt.ProfileId, true);
                 return;
             }
 
             var candidates = GetLegacyHistoryCandidates(evt.ProfileId);
             if (candidates.Length == 0)
+            {
+                QueueProfileHistoryReady(evt.ProfileId, false);
                 return;
+            }
 
             var history = Store.Get<HistoryArchive>(ModConstants.HistoryKey);
+            QueueProfileHistoryReady(evt.ProfileId, false);
             history.AttachPendingLoad(Task.Run(() => LoadBestLegacyHistory(candidates)));
             history.RequiresStorageRewrite = true;
             lock (LegacyMigrationGate)

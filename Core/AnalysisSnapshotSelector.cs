@@ -29,11 +29,11 @@ namespace STS2RitsuMetrics.Core
         {
             return run with
             {
-                Combats = run.Combats.Select(Summarize).ToArray(),
+                Combats = run.Combats.Select(SummarizeCombat).ToArray(),
             };
         }
 
-        private static CombatSnapshot Summarize(CombatSnapshot combat)
+        internal static CombatSnapshot SummarizeCombat(CombatSnapshot combat)
         {
             return combat with
             {

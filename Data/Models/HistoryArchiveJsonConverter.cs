@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 using Godot;
 using STS2RitsuLib.Utils.Persistence;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Core;
 
 namespace STS2RitsuMetrics.Data.Models
 {
@@ -91,7 +92,8 @@ namespace STS2RitsuMetrics.Data.Models
                         combat.StartedAtUtc,
                         combat.EndedAtUtc,
                         combat.Completed,
-                        combat.RoundCount));
+                        combat.RoundCount,
+                        AnalysisSnapshotSelector.SummarizeCombat(combat).Players.ToList()));
                     uncompressedBytes = checked(uncompressedBytes + storedCombat.UncompressedLength);
                     storedBytes = checked(storedBytes + storedCombat.StoredLength);
                 }
@@ -264,7 +266,7 @@ namespace STS2RitsuMetrics.Data.Models
 
             loader.SetDataDirectory(dataDirectory
                                     ?? throw new JsonException("Analytics history data directory is unavailable."));
-            archive.AttachCombatLoader(loader.Load);
+            archive.AttachCombatLoader(loader.Load, loader.LoadSummary);
             return archive;
         }
 
@@ -336,7 +338,7 @@ namespace STS2RitsuMetrics.Data.Models
                         reference.EndedAtUtc,
                         reference.Completed,
                         reference.RoundCount,
-                        [],
+                        reference.Players ?? [],
                         [],
                         []);
                     CachePreparedCombat(storedRun.RunId, combat,
@@ -713,7 +715,8 @@ namespace STS2RitsuMetrics.Data.Models
             DateTimeOffset StartedAtUtc,
             DateTimeOffset? EndedAtUtc,
             bool Completed,
-            int RoundCount);
+            int RoundCount,
+            List<PlayerMetricSnapshot>? Players = null);
 
         private sealed class FileCombatLoader(JsonSerializerOptions options)
         {
@@ -726,7 +729,10 @@ namespace STS2RitsuMetrics.Data.Models
 
             internal void Add(string runId, CombatSnapshot stub, CombatFileReference reference)
             {
-                _entries.Add(new(runId, reference.CombatId), new(stub, reference));
+                lock (_loadGate)
+                {
+                    _entries.Add(new(runId, reference.CombatId), new(stub, reference));
+                }
             }
 
             internal CombatSnapshot Load(CombatSnapshot combat)
@@ -734,6 +740,14 @@ namespace STS2RitsuMetrics.Data.Models
                 lock (_loadGate)
                 {
                     return LoadCore(combat);
+                }
+            }
+
+            internal CombatSnapshot LoadSummary(CombatSnapshot combat)
+            {
+                lock (_loadGate)
+                {
+                    return LoadSummaryCore(combat);
                 }
             }
 
@@ -774,12 +788,119 @@ namespace STS2RitsuMetrics.Data.Models
                 }
             }
 
+            private CombatSnapshot LoadSummaryCore(CombatSnapshot combat)
+            {
+                var key = new CombatStorageKey(combat.RunId, combat.CombatId);
+                if (!_entries.TryGetValue(key, out var indexed))
+                    return AnalysisSnapshotSelector.SummarizeCombat(combat);
+
+                try
+                {
+                    var dataDirectory = _dataDirectory
+                                        ?? throw new InvalidOperationException(
+                                            "Analytics history data directory is unavailable.");
+                    var stored = ReadCombatFile(
+                        Path.Combine(dataDirectory, indexed.Reference.FileName),
+                        indexed.Reference);
+                    var loaded = ReadSummary(Decode(stored));
+                    if (!string.Equals(loaded.CombatId, indexed.Reference.CombatId, StringComparison.Ordinal)
+                        || !string.Equals(loaded.RunId, combat.RunId, StringComparison.Ordinal))
+                        throw new JsonException("History combat summary identity does not match its index.");
+
+                    return combat with
+                    {
+                        Players = loaded.Players,
+                        Events = [],
+                        Timeline = [],
+                    };
+                }
+                catch (Exception exception)
+                {
+                    lock (_failureGate)
+                    {
+                        if (_failures.Add(key))
+                            Main.Logger.Error(
+                                $"Could not load analytics combat summary '{combat.CombatId}' from run " +
+                                $"'{combat.RunId}': {exception}");
+                    }
+
+                    return AnalysisSnapshotSelector.SummarizeCombat(combat);
+                }
+            }
+
+            private static CombatSummaryData ReadSummary(byte[] payload)
+            {
+                using var document = JsonDocument.Parse(payload);
+                var root = document.RootElement;
+                if (!TryGetProperty(root, nameof(CombatSnapshot.RunId), out var runIdElement) ||
+                    !TryGetProperty(root, nameof(CombatSnapshot.CombatId), out var combatIdElement) ||
+                    !TryGetProperty(root, nameof(CombatSnapshot.Players), out var playersElement) ||
+                    playersElement.ValueKind != JsonValueKind.Array)
+                    throw new JsonException("History combat summary fields are missing.");
+
+                var players = new List<PlayerMetricSnapshot>(playersElement.GetArrayLength());
+                foreach (var player in playersElement.EnumerateArray())
+                {
+                    var playerKey = String(player, nameof(PlayerMetricSnapshot.PlayerKey));
+                    var displayName = String(player, nameof(PlayerMetricSnapshot.DisplayName));
+                    var characterId = String(player, nameof(PlayerMetricSnapshot.CharacterId));
+                    var identityColor = String(player, nameof(PlayerMetricSnapshot.IdentityColor));
+                    ulong? playerNetId = null;
+                    if (TryGetProperty(player, nameof(PlayerMetricSnapshot.PlayerNetId), out var playerNetIdElement) &&
+                        playerNetIdElement.ValueKind == JsonValueKind.Number &&
+                        playerNetIdElement.TryGetUInt64(out var parsedPlayerNetId))
+                        playerNetId = parsedPlayerNetId;
+
+                    var damage = 0m;
+                    if (TryGetProperty(player, nameof(PlayerMetricSnapshot.Totals), out var totals) &&
+                        totals.ValueKind == JsonValueKind.Object &&
+                        TryGetProperty(totals, MetricIds.DamageDealt, out var damageElement) &&
+                        damageElement.ValueKind == JsonValueKind.Number)
+                        damage = damageElement.GetDecimal();
+                    IReadOnlyDictionary<string, decimal> summaryTotals = damage == 0m
+                        ? new Dictionary<string, decimal>(StringComparer.Ordinal)
+                        : new Dictionary<string, decimal>(StringComparer.Ordinal)
+                        {
+                            [MetricIds.DamageDealt] = damage,
+                        };
+                    players.Add(new(
+                        playerKey,
+                        playerNetId,
+                        displayName,
+                        characterId,
+                        summaryTotals,
+                        new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(StringComparer.Ordinal),
+                        identityColor));
+                }
+
+                return new(
+                    runIdElement.GetString() ?? string.Empty,
+                    combatIdElement.GetString() ?? string.Empty,
+                    players);
+
+                static string String(JsonElement element, string propertyName)
+                {
+                    return TryGetProperty(element, propertyName, out var value) &&
+                           value.ValueKind == JsonValueKind.String
+                        ? value.GetString() ?? string.Empty
+                        : string.Empty;
+                }
+            }
+
             internal void SetDataDirectory(string dataDirectory)
             {
-                _dataDirectory = dataDirectory;
+                lock (_loadGate)
+                {
+                    _dataDirectory = dataDirectory;
+                }
             }
 
             private sealed record IndexedCombat(CombatSnapshot Stub, CombatFileReference Reference);
+
+            private sealed record CombatSummaryData(
+                string RunId,
+                string CombatId,
+                IReadOnlyList<PlayerMetricSnapshot> Players);
         }
 
         private sealed class SegmentedArchive

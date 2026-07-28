@@ -53,15 +53,11 @@ namespace STS2RitsuMetrics.Ui
         {
             ArgumentNullException.ThrowIfNull(content);
             _contentHost.AddChild(content);
-            content.MinimumSizeChanged += InvalidateContentSize;
             InvalidateContentSize();
         }
 
         public void InvalidateContentSize()
         {
-            _contentHost.CustomMinimumSize = Vector2.Zero;
-            _contentHost.ResetSize();
-            _contentHost.UpdateMinimumSize();
             if (_layoutRefreshPending)
                 return;
             _layoutRefreshPending = true;
@@ -79,8 +75,6 @@ namespace STS2RitsuMetrics.Ui
         private void RefreshContentLayout()
         {
             _layoutRefreshPending = false;
-            _contentHost.ResetSize();
-            _contentHost.UpdateMinimumSize();
             _contentHost.QueueSort();
             QueueSort();
             Callable.From(ClampScrollAfterLayout).CallDeferred();
