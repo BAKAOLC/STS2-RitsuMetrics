@@ -135,7 +135,9 @@ namespace STS2RitsuMetrics.Ui
     {
         internal const string NodeName = "RitsuMetricsImmediateTooltip";
         private const float Gap = 9f;
-        private const float TooltipWidth = 320f;
+        private const float HorizontalContentMargin = 11f;
+        private const float TooltipWidth = 210f;
+        private const float TooltipContentWidth = TooltipWidth - HorizontalContentMargin * 2f;
         private readonly Label _body;
         private readonly List<(Control Owner, string Text)> _hovered = [];
         private readonly Label _title;
@@ -164,6 +166,7 @@ namespace STS2RitsuMetrics.Ui
             {
                 MouseFilter = MouseFilterEnum.Ignore,
                 AutowrapMode = TextServer.AutowrapMode.WordSmart,
+                CustomMinimumSize = new(TooltipContentWidth, 0f),
             };
             _body.AddThemeFontOverride("font", DashboardControlTheme.BodyFont);
             _body.AddThemeFontSizeOverride("font_size", DashboardControlTheme.CaptionFontSize);
@@ -274,9 +277,9 @@ namespace STS2RitsuMetrics.Ui
                 CornerRadiusTopRight = 5,
                 CornerRadiusBottomLeft = 5,
                 CornerRadiusBottomRight = 5,
-                ContentMarginLeft = 11f,
+                ContentMarginLeft = HorizontalContentMargin,
                 ContentMarginTop = 8f,
-                ContentMarginRight = 11f,
+                ContentMarginRight = HorizontalContentMargin,
                 ContentMarginBottom = 8f,
                 ShadowColor = new(0f, 0f, 0f, 0.68f),
                 ShadowSize = 7,

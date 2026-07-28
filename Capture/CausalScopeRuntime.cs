@@ -2,6 +2,7 @@
 
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
+using STS2RitsuLib.Utils.Speculation;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
 
@@ -32,7 +33,17 @@ namespace STS2RitsuMetrics.Capture
         internal static Func<string?>? FallbackParentResolver { get; set; }
         internal static Func<bool>? IsCombatActive { get; set; }
 
-        internal static bool Active => IsCombatActive?.Invoke() == true;
+        internal static bool IsSpeculative => SpeculativeExecutionSession.Current != null;
+
+        internal static bool Active =>
+            IsCombatActive?.Invoke() == true &&
+            !IsSpeculative;
+
+        internal static void DispatchLifecycle<TEvent>(Action<TEvent> handler, TEvent evt)
+        {
+            if (!IsSpeculative)
+                handler(evt);
+        }
     }
 
     internal static class CausalScopeRuntime

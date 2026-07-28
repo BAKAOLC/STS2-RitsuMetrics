@@ -326,10 +326,18 @@ namespace STS2RitsuMetrics.Capture
             Task<IEnumerable<DamageResult>> resultTask,
             DamageRequestCapture request)
         {
-            var results = await resultTask;
-            if (results is IReadOnlyList<DamageResult> materialized)
+            try
+            {
+                var results = await resultTask;
+                var materialized = results as IReadOnlyList<DamageResult> ?? results.ToArray();
                 DamageCaptureHub.CompleteRequest(request, materialized);
-            return results;
+                return materialized;
+            }
+            catch
+            {
+                DamageCaptureHub.AbortRequest(request);
+                throw;
+            }
         }
 
         private static Exception? DamageRequestFinalizer(Exception? __exception, DamageCaptureHub.RequestState? __state)

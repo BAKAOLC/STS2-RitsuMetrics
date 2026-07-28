@@ -6,7 +6,13 @@
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
         <NoWarn>$(NoWarn);CS0436;CS8785</NoWarn>
+        <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
+        <Sts2ApiSignatureRoot Condition="'$(Sts2ApiSignatureRoot)' == ''">$(MSBuildProjectDirectory)\..\..\sts2-api-signatures</Sts2ApiSignatureRoot>
+        <Sts2ApiBaseline>0.107.1</Sts2ApiBaseline>
+        <Sts2DataDir Condition="'$(Sts2DataDir)' == '' and Exists('$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)\sts2.dll')">$(Sts2ApiSignatureRoot)\$(Sts2ApiBaseline)</Sts2DataDir>
     </PropertyGroup>
+
+    <Import Project="..\Sts2PathDiscovery.props"/>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1"/>
@@ -19,5 +25,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\STS2-RitsuMetrics.csproj"/>
+        <Reference Include="sts2" HintPath="$(Sts2DataDir)\sts2.dll" Private="True"/>
     </ItemGroup>
 </Project>

@@ -21,7 +21,7 @@
     <Import Project="Sts2PathDiscovery.props"/>
 
     <ItemGroup>
-        <PackageReference Include="STS2.RitsuLib" Version="0.4.57"/>
+        <PackageReference Include="STS2.RitsuLib" Version="0.4.65"/>
     </ItemGroup>
 
     <ItemGroup>

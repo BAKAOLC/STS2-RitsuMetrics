@@ -179,7 +179,9 @@ namespace STS2RitsuMetrics.Core
         private void Subscribe<TEvent>(Action<TEvent> handler, bool replayLatest = true)
             where TEvent : struct, IFrameworkLifecycleEvent
         {
-            _subscriptions.Add(RitsuLibFramework.SubscribeLifecycle(handler, replayLatest));
+            _subscriptions.Add(RitsuLibFramework.SubscribeLifecycle<TEvent>(
+                evt => CaptureBridge.DispatchLifecycle(handler, evt),
+                replayLatest));
         }
 
         private void OnRunStarted(RunStartedEvent evt)
@@ -712,6 +714,12 @@ namespace STS2RitsuMetrics.Core
                 var entries = history.Entries as IReadOnlyList<CombatHistoryEntry> ?? history.Entries.ToArray();
                 if (_processedHistoryEntries > entries.Count)
                     _processedHistoryEntries = 0;
+                if (CaptureBridge.IsSpeculative)
+                {
+                    _processedHistoryEntries = entries.Count;
+                    return;
+                }
+
                 while (_processedHistoryEntries < entries.Count)
                     ProcessEntry(entries[_processedHistoryEntries++], combat);
             }
@@ -785,34 +793,39 @@ namespace STS2RitsuMetrics.Core
 
         private void RecordDamage(DamageReceivedEntry damage)
         {
-            DamageCaptureHub.TryConsume(damage.Result, damage.Receiver, damage.Dealer, damage.CardSource,
-                damage.Result.Props, out _, out var calculation);
-            RecordDamage(damage.Result, damage.Receiver, damage.Dealer, damage.CardSource, calculation, null);
+            if (DamageCaptureHub.ObserveResult(damage.Result, out var completedGroups))
+            {
+                foreach (var group in completedGroups)
+                    RecordDamage(group.Results, group.Calculation?.Target ?? group.Results[0].Receiver,
+                        damage.Dealer, damage.CardSource, group.Calculation, null);
+                return;
+            }
+
+            RecordDamage([damage.Result], damage.Receiver, damage.Dealer, damage.CardSource, null, null);
         }
 
         private void OnDamageRequestCompleted(
             DamageRequestCapture request,
-            IReadOnlyList<DamageResult> unrecordedResults)
+            IReadOnlyList<DamageResult> results)
         {
             if (!_captureActive || _activeCombat == null)
                 return;
-            Main.Logger.Debug($"Recovered {unrecordedResults.Count} damage result(s) omitted from combat history.");
-            foreach (var result in unrecordedResults)
-            {
-                DamageCaptureHub.TryConsume(request, result.Receiver, request.Dealer, request.CardSource,
-                    result.Props, out var calculation);
-                RecordDamage(result, result.Receiver, request.Dealer, request.CardSource, calculation, request.Cause);
-            }
+            foreach (var group in DamageCaptureHub.GroupResults(request, results))
+                RecordDamage(group.Results, group.Calculation?.Target ?? group.Results[0].Receiver,
+                    request.Dealer, request.CardSource, group.Calculation, request.Cause);
         }
 
         private void RecordDamage(
-            DamageResult result,
+            IReadOnlyList<DamageResult> results,
             Creature damageReceiver,
             Creature? damageDealer,
             CardModel? damageCardSource,
             DamageCalculationCapture? calculation,
             CausalScopeSnapshot? requestCause)
         {
+            if (results.Count == 0)
+                return;
+            var props = results[0].Props;
             var cause = calculation?.Cause ?? requestCause ?? CausalScopeRuntime.Snapshot();
             var source = cause?.Source ?? (damageCardSource != null
                 ? GameDescriptorFactory.Card(damageCardSource)
@@ -824,32 +837,31 @@ namespace STS2RitsuMetrics.Core
             var dealerEntity = GameDescriptorFactory.CreatureOrNull(damageDealer);
 
             var receiver = GameDescriptorFactory.Creature(damageReceiver);
-            var hpLost = (decimal)result.UnblockedDamage;
-            var blocked = (decimal)result.BlockedDamage;
-            var overkill = (decimal)result.OverkillDamage;
+            var hpLost = results.Sum(static result => (decimal)result.UnblockedDamage);
+            var blocked = results.Sum(static result => (decimal)result.BlockedDamage);
+            var overkill = ResolveTerminalOverkill(calculation, results);
             var damageDealt = hpLost + blocked;
             var modified = calculation?.ModifiedAmount ?? hpLost + blocked + overkill;
             var requested = calculation?.RequestedAmount ?? modified;
             var contributions = BuildContributions(calculation, source, requested, modified, blocked, damageDealt,
                 overkill);
-            var attributionShares = ResolveAttributionShares(damageReceiver, cause?.Model, result.Props,
+            var attributionShares = ResolveAttributionShares(damageReceiver, cause?.Model, props,
                 damageDealt, directDealer, source);
             var effectiveHpShares = ScaleShares(attributionShares, hpLost);
             if (directDealer == null && attributionShares.Length > 0)
                 source = attributionShares[0].Source;
             var breakdown = new DamageBreakdown(requested, modified, blocked, hpLost, overkill, damageDealt,
-                result.Props.ToString(), contributions, attributionShares);
+                props.ToString(), contributions, attributionShares);
             var tags = WithActorTags(Tags(
-                ("value_props", result.Props.ToString()),
-                ("was_kill", result.WasTargetKilled.ToString()),
-                ("fully_blocked", result.WasFullyBlocked.ToString()),
+                ("value_props", props.ToString()),
+                ("was_kill", results.Any(static result => result.WasTargetKilled).ToString()),
+                ("fully_blocked", (hpLost == 0m && blocked > 0m).ToString()),
                 ("attribution",
                     calculation != null
                         ? nameof(AttributionConfidence.Exact)
                         : nameof(AttributionConfidence.Heuristic))), damageDealer);
 
             var receivingPlayer = GameDescriptorFactory.Player(damageReceiver);
-            var receivingPlayerBody = GameDescriptorFactory.PlayerBody(damageReceiver);
             if (receivingPlayer == null)
             {
                 foreach (var share in AggregateShares(attributionShares)
@@ -868,18 +880,26 @@ namespace STS2RitsuMetrics.Core
                     receiver, tags, MetricIds.EffectiveHpDamageContribution);
             }
 
-            if (receivingPlayerBody != null && hpLost > 0)
-                Record(receivingPlayerBody, MetricIds.DamageTaken, hpLost, source,
-                    GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
-            else if (receivingPlayer != null && receiver.Kind == AnalyticsEntityKind.Summon && hpLost > 0)
-                Record(receivingPlayer, MetricIds.SummonDamageTaken, hpLost, source,
-                    GameDescriptorFactory.CreatureOrNull(damageDealer), WithActorTags(tags, damageReceiver));
-            if (receivingPlayer != null && blocked > 0)
+            foreach (var result in results)
             {
-                if (receivingPlayerBody != null)
-                    Record(receivingPlayerBody, MetricIds.DamageBlocked, blocked, source,
+                var resultReceiver = GameDescriptorFactory.Creature(result.Receiver);
+                var resultReceivingPlayer = GameDescriptorFactory.Player(result.Receiver);
+                var resultReceivingPlayerBody = GameDescriptorFactory.PlayerBody(result.Receiver);
+                var resultHpLost = (decimal)result.UnblockedDamage;
+                var resultBlocked = (decimal)result.BlockedDamage;
+                if (resultReceivingPlayerBody != null && resultHpLost > 0m)
+                    Record(resultReceivingPlayerBody, MetricIds.DamageTaken, resultHpLost, source,
                         GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
-                RecordBlockedContribution(damageReceiver, receivingPlayer, blocked,
+                else if (resultReceivingPlayer != null && resultReceiver.Kind == AnalyticsEntityKind.Summon &&
+                         resultHpLost > 0m)
+                    Record(resultReceivingPlayer, MetricIds.SummonDamageTaken, resultHpLost, source,
+                        GameDescriptorFactory.CreatureOrNull(damageDealer), WithActorTags(tags, result.Receiver));
+                if (resultReceivingPlayer == null || resultBlocked <= 0m)
+                    continue;
+                if (resultReceivingPlayerBody != null)
+                    Record(resultReceivingPlayerBody, MetricIds.DamageBlocked, resultBlocked, source,
+                        GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
+                RecordBlockedContribution(result.Receiver, resultReceivingPlayer, resultBlocked,
                     GameDescriptorFactory.CreatureOrNull(damageDealer), tags);
             }
 
@@ -893,9 +913,9 @@ namespace STS2RitsuMetrics.Core
                 dealerEntity ?? (attributionShares.Length > 0 ? attributionShares[0].Contributor : null),
                 receiver, source,
                 damageDealt, damage: breakdown, parentEventId: cause?.EventId,
-                details: Details(("value_props", result.Props.ToString()),
-                    ("killed", result.WasTargetKilled.ToString()),
-                    ("fully_blocked", result.WasFullyBlocked.ToString()),
+                details: Details(("value_props", props.ToString()),
+                    ("killed", results.Any(static result => result.WasTargetKilled).ToString()),
+                    ("fully_blocked", (hpLost == 0m && blocked > 0m).ToString()),
                     ("attribution", calculation != null ? "exact" : "heuristic"),
                     ("contributors", attributionShares.Length.ToString(CultureInfo.InvariantCulture)),
                     ("origin_event_ids", string.Join(';', attributionShares.Select(share => share.OriginEventId)
@@ -928,6 +948,17 @@ namespace STS2RitsuMetrics.Core
                 if (calculation != null && role == DamageContributionRole.Modifier)
                     RecordModifierMetric(damageReceiver, calculation, contribution, receiver, tags);
             }
+        }
+
+        internal static decimal ResolveTerminalOverkill(
+            DamageCalculationCapture? calculation,
+            IReadOnlyList<DamageResult> results)
+        {
+            var terminalReceiver = calculation?.HpLossPasses.LastOrDefault()?.Target ?? calculation?.Target;
+            if (terminalReceiver == null)
+                return results.Sum(static result => (decimal)result.OverkillDamage);
+            return results.LastOrDefault(result => ReferenceEquals(result.Receiver, terminalReceiver))
+                ?.OverkillDamage ?? 0m;
         }
 
         internal static EntityDescriptor? ResolveDirectDamagePlayer(
@@ -1063,9 +1094,7 @@ namespace STS2RitsuMetrics.Core
                             AttributionConfidence.Derived, "Unexposed host HP-loss modifier"));
                 }
 
-            var finalHpLossPass = calculation.HpLossPasses.LastOrDefault();
-            var hpLossOutput = finalHpLossPass?.OutputValue ?? calculation.FinalHpLossAmount ??
-                Math.Max(modified - blocked, 0m);
+            var hpLossOutput = contributions.Sum(static contribution => contribution.RawContribution);
             if (hpLossOutput != appliedHpDamage)
                 contributions.Add(new(GameDescriptorFactory.DamageQuantization(),
                     DamageContributionStage.Quantization, hpLossOutput, appliedHpDamage,
@@ -1088,16 +1117,9 @@ namespace STS2RitsuMetrics.Core
         private static ReadOnlyCollection<DamageContribution> FinalizeContributions(
             List<DamageContribution> contributions,
             decimal effectiveDamage,
-            decimal hpLost)
+            decimal _)
         {
-            var result = AllocateEffectiveContributions(contributions, effectiveDamage);
-            var settledHp = result.Sum(contribution => contribution.RawContribution);
-            if (Math.Abs(settledHp - hpLost) > 0.0001m)
-                Main.Logger.Warn(
-                    $"Damage settlement invariant mismatch: waterfall={settledHp.ToString(CultureInfo.InvariantCulture)}, " +
-                    $"hp_lost={hpLost.ToString(CultureInfo.InvariantCulture)}, " +
-                    $"effective={effectiveDamage.ToString(CultureInfo.InvariantCulture)}.");
-            return result;
+            return AllocateEffectiveContributions(contributions, effectiveDamage);
         }
 
         private static ReadOnlyCollection<DamageContribution> AllocateEffectiveContributions(

@@ -2,7 +2,6 @@
 
 using System.Collections.Concurrent;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.ValueProps;
@@ -57,35 +56,24 @@ namespace STS2RitsuMetrics.Capture
         internal List<ModifierCapture> Modifiers { get; } = [];
         internal List<FactorModifierCapture> FactorModifiers { get; } = [];
         internal List<HpLossPassCapture> HpLossPasses { get; } = [];
-        private HashSet<Creature> ConsumedReceivers { get; } = new(ReferenceEqualityComparer.Instance);
 
-        internal bool CanConsume(Creature receiver)
+        internal int ExpectedResultCount
         {
-            if (ReferenceEquals(Target, receiver) && ConsumedReceivers.Count > 0)
-                return false;
-            return !ConsumedReceivers.Contains(receiver) &&
-                   (ReferenceEquals(Target, receiver) ||
-                    HpLossPasses.Any(pass => ReferenceEquals(pass.Target, receiver)));
+            get
+            {
+                var receivers = new HashSet<Creature>(ReferenceEqualityComparer.Instance);
+                if (Target != null)
+                    receivers.Add(Target);
+                foreach (var pass in HpLossPasses)
+                    receivers.Add(pass.Target);
+                return receivers.Count;
+            }
         }
 
-        internal DamageCalculationCapture ConsumeFor(Creature receiver)
+        internal bool RelatesTo(Creature receiver)
         {
-            ConsumedReceivers.Add(receiver);
-            var finalPassIndex = HpLossPasses.FindLastIndex(pass => ReferenceEquals(pass.Target, receiver));
-            if (finalPassIndex < 0 || finalPassIndex == HpLossPasses.Count - 1)
-                return this;
-
-            var finalPass = HpLossPasses[finalPassIndex];
-            var view = new DamageCalculationCapture(Target, Dealer, CardSource, RequestedAmount, Props, Cause)
-            {
-                CurrentValue = finalPass.OutputValue,
-                ModifiedAmount = ModifiedAmount,
-                FinalHpLossAmount = finalPass.OutputValue,
-            };
-            view.Modifiers.AddRange(Modifiers.Take(finalPass.ModifierEndIndex));
-            view.FactorModifiers.AddRange(FactorModifiers);
-            view.HpLossPasses.AddRange(HpLossPasses.Take(finalPassIndex + 1));
-            return view;
+            return ReferenceEquals(Target, receiver) ||
+                   HpLossPasses.Any(pass => ReferenceEquals(pass.Target, receiver));
         }
     }
 
@@ -104,16 +92,22 @@ namespace STS2RitsuMetrics.Capture
         internal IReadOnlyList<Creature> Targets { get; } = targets;
         internal CausalScopeSnapshot? Cause { get; } = cause;
         internal List<DamageCalculationCapture> Calculations { get; } = [];
+        internal List<DamageResult> ObservedResults { get; } = [];
+        internal HashSet<DamageResult> EmittedResults { get; } = new(ReferenceEqualityComparer.Instance);
+
+        internal HashSet<DamageCalculationCapture> EmittedCalculations { get; } =
+            new(ReferenceEqualityComparer.Instance);
     }
+
+    internal sealed record DamageResultGroup(
+        DamageCalculationCapture? Calculation,
+        IReadOnlyList<DamageResult> Results);
 
     internal static class DamageCaptureHub
     {
         private static readonly AsyncLocal<DamageRequestCapture?> CurrentRequestValue = new();
         private static readonly AsyncLocal<DamageCalculationCapture?> CurrentCalculationValue = new();
         private static readonly ConcurrentDictionary<MethodBase, ArgumentLayout> ArgumentLayouts = new();
-        private static readonly ConditionalWeakTable<DamageResult, object> RecordedResults = new();
-        private static readonly Lock RecordedResultsLock = new();
-        private static readonly object RecordedResultMarker = new();
 
         private static readonly IEqualityComparer<DamageResult> DamageResultComparer =
             ReferenceEqualityComparer.Instance;
@@ -344,80 +338,101 @@ namespace STS2RitsuMetrics.Capture
                 context));
         }
 
-        internal static bool TryConsume(
+        internal static bool ObserveResult(
             DamageResult result,
-            Creature receiver,
-            Creature? dealer,
-            CardModel? cardSource,
-            ValueProp props,
-            out DamageRequestCapture? request,
-            out DamageCalculationCapture? calculation)
+            out IReadOnlyList<DamageResultGroup> completedGroups)
         {
-            MarkRecorded(result);
-            request = CurrentRequestValue.Value;
-            return TryConsume(request, receiver, dealer, cardSource, props, out calculation);
-        }
-
-        internal static bool TryConsume(
-            DamageRequestCapture? request,
-            Creature receiver,
-            Creature? dealer,
-            CardModel? cardSource,
-            ValueProp props,
-            out DamageCalculationCapture? calculation)
-        {
-            calculation = null;
+            completedGroups = [];
+            var request = CurrentRequestValue.Value;
             if (request == null)
                 return false;
-            lock (request.Calculations)
+            lock (request.ObservedResults)
             {
-                calculation = request.Calculations.FirstOrDefault(candidate =>
-                    candidate.CanConsume(receiver) && ReferenceEquals(candidate.Target, receiver) &&
-                    candidate.Props == props);
-                calculation ??= request.Calculations.FirstOrDefault(candidate =>
-                    candidate.CanConsume(receiver) && candidate.Props == props &&
-                    ReferenceEquals(candidate.Dealer, dealer) &&
-                    ReferenceEquals(candidate.CardSource, cardSource));
-                calculation ??= request.Calculations.FirstOrDefault(candidate => candidate.CanConsume(receiver));
-                if (calculation == null)
-                    return false;
-                calculation = calculation.ConsumeFor(receiver);
-                return true;
+                if (!request.ObservedResults.Contains(result, DamageResultComparer))
+                    request.ObservedResults.Add(result);
+                var pending = request.ObservedResults
+                    .Where(candidate => !request.EmittedResults.Contains(candidate))
+                    .ToArray();
+                completedGroups = GroupResults(request, pending)
+                    .Where(static group => group.Calculation != null &&
+                                           group.Results.Count == group.Calculation.ExpectedResultCount)
+                    .ToArray();
+                foreach (var group in completedGroups)
+                {
+                    request.EmittedCalculations.Add(group.Calculation!);
+                    foreach (var completedResult in group.Results)
+                        request.EmittedResults.Add(completedResult);
+                }
             }
+
+            return true;
+        }
+
+        internal static IReadOnlyList<DamageResultGroup> GroupResults(
+            DamageRequestCapture request,
+            IReadOnlyList<DamageResult> results)
+        {
+            var groups = request.Calculations
+                .Where(calculation => !request.EmittedCalculations.Contains(calculation))
+                .Select(static calculation => new MutableDamageResultGroup(calculation))
+                .ToList();
+            var unmatched = new List<DamageResultGroup>();
+            foreach (var result in results)
+            {
+                var group = groups.FirstOrDefault(candidate => candidate.CanAdd(result));
+                if (group == null)
+                {
+                    unmatched.Add(new(null, [result]));
+                    continue;
+                }
+
+                group.Add(result);
+            }
+
+            return groups
+                .Where(static group => group.Results.Count > 0)
+                .Select(static group => new DamageResultGroup(group.Calculation, group.Results.AsReadOnly()))
+                .Concat(unmatched)
+                .ToArray();
         }
 
         internal static void CompleteRequest(
             DamageRequestCapture request,
             IEnumerable<DamageResult> results)
         {
-            DamageResult[] unrecorded;
-            lock (RecordedResultsLock)
-            {
-                unrecorded = results
-                    .Where(result => !RecordedResults.TryGetValue(result, out _))
-                    .Distinct(DamageResultComparer)
-                    .ToArray();
-                foreach (var result in unrecorded)
-                    RecordedResults.Add(result, RecordedResultMarker);
-            }
-
-            if (unrecorded.Length == 0)
+            var allResults = MaterializeResults(request, results);
+            if (allResults.Count == 0)
                 return;
             try
             {
-                CaptureBridge.DamageRequestCompleted?.Invoke(request, unrecorded);
+                CaptureBridge.DamageRequestCompleted?.Invoke(request, allResults);
             }
             catch (Exception exception)
             {
-                Main.Logger.Error($"Failed to recover damage results omitted from combat history: {exception}");
+                Main.Logger.Error($"Failed to record completed damage request: {exception}");
             }
         }
 
-        private static void MarkRecorded(DamageResult result)
+        internal static void AbortRequest(DamageRequestCapture request)
         {
-            lock (RecordedResultsLock)
+            CompleteRequest(request, []);
+        }
+
+        private static List<DamageResult> MaterializeResults(
+            DamageRequestCapture request,
+            IEnumerable<DamageResult> results)
+        {
+            lock (request.ObservedResults)
             {
-                RecordedResults.GetValue(result, static _ => RecordedResultMarker);
+                var materialized = results
+                    .Where(result => !request.EmittedResults.Contains(result))
+                    .Distinct(DamageResultComparer)
+                    .ToList();
+                materialized.AddRange(request.ObservedResults.Where(observed =>
+                    !request.EmittedResults.Contains(observed) &&
+                    !materialized.Contains(observed, DamageResultComparer)));
+
+                return materialized;
             }
         }
 
@@ -438,6 +453,32 @@ namespace STS2RitsuMetrics.Capture
             if (Argument<IEnumerable<Creature>>(args, layout.TargetsIndex) is { } creatures)
                 return creatures.ToArray();
             return [];
+        }
+
+        private sealed class MutableDamageResultGroup
+        {
+            private readonly HashSet<Creature> _receivers = new(ReferenceEqualityComparer.Instance);
+
+            internal MutableDamageResultGroup(DamageCalculationCapture calculation)
+            {
+                Calculation = calculation;
+            }
+
+            internal DamageCalculationCapture Calculation { get; }
+            internal List<DamageResult> Results { get; } = [];
+
+            internal bool CanAdd(DamageResult result)
+            {
+                return Calculation.Props == result.Props &&
+                       !_receivers.Contains(result.Receiver) &&
+                       Calculation.RelatesTo(result.Receiver);
+            }
+
+            internal void Add(DamageResult result)
+            {
+                _receivers.Add(result.Receiver);
+                Results.Add(result);
+            }
         }
 
         private sealed class ArgumentLayout
