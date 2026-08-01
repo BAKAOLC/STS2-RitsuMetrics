@@ -83,7 +83,8 @@ namespace STS2RitsuMetrics.Capture
         Creature? dealer,
         CardModel? cardSource,
         IReadOnlyList<Creature> targets,
-        CausalScopeSnapshot? cause)
+        CausalScopeSnapshot? cause,
+        DamageRequestFamily? family = null)
     {
         internal decimal RequestedAmount { get; } = requestedAmount;
         internal ValueProp Props { get; } = props;
@@ -93,10 +94,16 @@ namespace STS2RitsuMetrics.Capture
         internal CausalScopeSnapshot? Cause { get; } = cause;
         internal List<DamageCalculationCapture> Calculations { get; } = [];
         internal List<DamageResult> ObservedResults { get; } = [];
-        internal HashSet<DamageResult> EmittedResults { get; } = new(ReferenceEqualityComparer.Instance);
+        internal DamageRequestFamily Family { get; } = family ?? new();
 
         internal HashSet<DamageCalculationCapture> EmittedCalculations { get; } =
             new(ReferenceEqualityComparer.Instance);
+    }
+
+    internal sealed class DamageRequestFamily
+    {
+        internal Lock SyncRoot { get; } = new();
+        internal HashSet<DamageResult> EmittedResults { get; } = new(ReferenceEqualityComparer.Instance);
     }
 
     internal sealed record DamageResultGroup(
@@ -125,7 +132,8 @@ namespace STS2RitsuMetrics.Capture
             var card = Argument<CardModel>(args, layout.CardSourceIndex);
             var targets = Targets(args, layout);
             var previous = CurrentRequestValue.Value;
-            var request = new DamageRequestCapture(amount, props, dealer, card, targets, CausalScopeRuntime.Snapshot());
+            var request = new DamageRequestCapture(amount, props, dealer, card, targets, CausalScopeRuntime.Snapshot(),
+                previous?.Family);
             CurrentRequestValue.Value = request;
             return new(request, previous);
         }
@@ -346,12 +354,12 @@ namespace STS2RitsuMetrics.Capture
             var request = CurrentRequestValue.Value;
             if (request == null)
                 return false;
-            lock (request.ObservedResults)
+            lock (request.Family.SyncRoot)
             {
                 if (!request.ObservedResults.Contains(result, DamageResultComparer))
                     request.ObservedResults.Add(result);
                 var pending = request.ObservedResults
-                    .Where(candidate => !request.EmittedResults.Contains(candidate))
+                    .Where(candidate => !request.Family.EmittedResults.Contains(candidate))
                     .ToArray();
                 completedGroups = GroupResults(request, pending)
                     .Where(static group => group.Calculation != null &&
@@ -361,7 +369,7 @@ namespace STS2RitsuMetrics.Capture
                 {
                     request.EmittedCalculations.Add(group.Calculation!);
                     foreach (var completedResult in group.Results)
-                        request.EmittedResults.Add(completedResult);
+                        request.Family.EmittedResults.Add(completedResult);
                 }
             }
 
@@ -422,15 +430,17 @@ namespace STS2RitsuMetrics.Capture
             DamageRequestCapture request,
             IEnumerable<DamageResult> results)
         {
-            lock (request.ObservedResults)
+            lock (request.Family.SyncRoot)
             {
                 var materialized = results
-                    .Where(result => !request.EmittedResults.Contains(result))
+                    .Where(result => !request.Family.EmittedResults.Contains(result))
                     .Distinct(DamageResultComparer)
                     .ToList();
                 materialized.AddRange(request.ObservedResults.Where(observed =>
-                    !request.EmittedResults.Contains(observed) &&
+                    !request.Family.EmittedResults.Contains(observed) &&
                     !materialized.Contains(observed, DamageResultComparer)));
+                foreach (var result in materialized)
+                    request.Family.EmittedResults.Add(result);
 
                 return materialized;
             }

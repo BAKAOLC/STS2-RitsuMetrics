@@ -5,6 +5,7 @@ using STS2RitsuMetrics.Capture;
 
 namespace STS2RitsuMetrics.Tests
 {
+    [Collection(CaptureBridgeTestCollection.Name)]
     public sealed class SpeculativeCaptureIsolationTests
     {
         [Fact]

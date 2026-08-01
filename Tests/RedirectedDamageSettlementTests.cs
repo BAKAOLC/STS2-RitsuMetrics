@@ -9,6 +9,7 @@ using STS2RitsuMetrics.Core;
 
 namespace STS2RitsuMetrics.Tests
 {
+    [Collection(CaptureBridgeTestCollection.Name)]
     public sealed class RedirectedDamageSettlementTests
     {
         [Fact]
@@ -91,6 +92,122 @@ namespace STS2RitsuMetrics.Tests
             {
                 DamageCaptureHub.RestoreRequest(state);
                 CaptureBridge.IsCombatActive = previous;
+            }
+        }
+
+        [Fact]
+        public void NestedDamageWrapperEmitsSharedResultsOnlyOnce()
+        {
+            var previousCombatState = CaptureBridge.IsCombatActive;
+            var previousHandler = CaptureBridge.DamageRequestCompleted;
+            var target = Creature();
+            var result = Result(target, 9);
+            var method = typeof(RedirectedDamageSettlementTests).GetMethod(
+                nameof(CaptureRequest),
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            var emissions = new List<(DamageRequestCapture Request, IReadOnlyList<DamageResult> Results)>();
+            CaptureBridge.IsCombatActive = static () => true;
+            CaptureBridge.DamageRequestCompleted = (request, results) => emissions.Add((request, results));
+            var outer = DamageCaptureHub.BeginRequest(method,
+                [9m, ValueProp.Move, null!, new[] { target }]);
+            Assert.NotNull(outer);
+            var inner = DamageCaptureHub.BeginRequest(method,
+                [9m, ValueProp.Move, null!, new[] { target }]);
+            Assert.NotNull(inner);
+            try
+            {
+                DamageCaptureHub.CompleteRequest(inner.Request, [result]);
+                DamageCaptureHub.CompleteRequest(outer.Request, [result]);
+
+                var emission = Assert.Single(emissions);
+                Assert.Same(inner.Request, emission.Request);
+                Assert.Equal([result], emission.Results);
+            }
+            finally
+            {
+                DamageCaptureHub.RestoreRequest(inner);
+                DamageCaptureHub.RestoreRequest(outer);
+                CaptureBridge.DamageRequestCompleted = previousHandler;
+                CaptureBridge.IsCombatActive = previousCombatState;
+            }
+        }
+
+        [Fact]
+        public void NestedDamageWrapperDoesNotReemitObservedResult()
+        {
+            var previousCombatState = CaptureBridge.IsCombatActive;
+            var previousHandler = CaptureBridge.DamageRequestCompleted;
+            var target = Creature();
+            var result = Result(target, 9);
+            var method = typeof(RedirectedDamageSettlementTests).GetMethod(
+                nameof(CaptureRequest),
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            var fallbackEmissionCount = 0;
+            CaptureBridge.IsCombatActive = static () => true;
+            CaptureBridge.DamageRequestCompleted = (_, _) => fallbackEmissionCount++;
+            var outer = DamageCaptureHub.BeginRequest(method,
+                [9m, ValueProp.Move, null!, new[] { target }]);
+            Assert.NotNull(outer);
+            var inner = DamageCaptureHub.BeginRequest(method,
+                [9m, ValueProp.Move, null!, new[] { target }]);
+            Assert.NotNull(inner);
+            var calculation = Calculation(target, 9m, (target, 9m));
+            inner.Request.Calculations.Add(calculation);
+            try
+            {
+                Assert.True(DamageCaptureHub.ObserveResult(result, out var observed));
+                var group = Assert.Single(observed);
+                Assert.Same(calculation, group.Calculation);
+                Assert.Equal([result], group.Results);
+
+                DamageCaptureHub.CompleteRequest(inner.Request, [result]);
+                DamageCaptureHub.CompleteRequest(outer.Request, [result]);
+
+                Assert.Equal(0, fallbackEmissionCount);
+            }
+            finally
+            {
+                DamageCaptureHub.RestoreRequest(inner);
+                DamageCaptureHub.RestoreRequest(outer);
+                CaptureBridge.DamageRequestCompleted = previousHandler;
+                CaptureBridge.IsCombatActive = previousCombatState;
+            }
+        }
+
+        [Fact]
+        public void IndependentDamageRequestsDoNotShareResultDeduplication()
+        {
+            var previousCombatState = CaptureBridge.IsCombatActive;
+            var previousHandler = CaptureBridge.DamageRequestCompleted;
+            var target = Creature();
+            var result = Result(target, 9);
+            var method = typeof(RedirectedDamageSettlementTests).GetMethod(
+                nameof(CaptureRequest),
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            var emissions = new List<IReadOnlyList<DamageResult>>();
+            CaptureBridge.IsCombatActive = static () => true;
+            CaptureBridge.DamageRequestCompleted = (_, results) => emissions.Add(results);
+            try
+            {
+                var first = DamageCaptureHub.BeginRequest(method,
+                    [9m, ValueProp.Move, null!, new[] { target }]);
+                Assert.NotNull(first);
+                DamageCaptureHub.CompleteRequest(first.Request, [result]);
+                DamageCaptureHub.RestoreRequest(first);
+
+                var second = DamageCaptureHub.BeginRequest(method,
+                    [9m, ValueProp.Move, null!, new[] { target }]);
+                Assert.NotNull(second);
+                DamageCaptureHub.CompleteRequest(second.Request, [result]);
+                DamageCaptureHub.RestoreRequest(second);
+
+                Assert.Equal(2, emissions.Count);
+                Assert.All(emissions, results => Assert.Equal([result], results));
+            }
+            finally
+            {
+                CaptureBridge.DamageRequestCompleted = previousHandler;
+                CaptureBridge.IsCombatActive = previousCombatState;
             }
         }
 
