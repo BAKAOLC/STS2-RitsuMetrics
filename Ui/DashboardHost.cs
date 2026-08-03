@@ -15,7 +15,8 @@ namespace STS2RitsuMetrics.Ui
     internal sealed partial class DashboardHost : CanvasLayer
     {
         private const int FloatingWindowLayer = 120;
-        private const int ControlSurfaceLayer = FloatingWindowLayer + 1;
+        private const int RitsuLibWorkspaceLayer = 180;
+        private const int ControlSurfaceLayer = RitsuLibWorkspaceLayer + 1;
         private const int BehindCapstoneLayer = -1;
         private const double DashboardDataRefreshInterval = 0.12d;
         private readonly Lock _dashboardDataGate = new();
