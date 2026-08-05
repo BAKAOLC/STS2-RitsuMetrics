@@ -3,6 +3,7 @@
 using System.Globalization;
 using Godot;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Core;
 using STS2RitsuMetrics.Localization;
 
 namespace STS2RitsuMetrics.Ui
@@ -41,6 +42,8 @@ namespace STS2RitsuMetrics.Ui
             {
                 AdvancedDashboardMode.ContributionAnalysis => DashboardDataComponents.Metrics |
                                                               DashboardDataComponents.Events,
+                AdvancedDashboardMode.DefenseResources => DashboardDataComponents.Metrics |
+                                                          DashboardDataComponents.Timeline,
                 AdvancedDashboardMode.TurnAnalysis => DashboardDataComponents.Timeline,
                 AdvancedDashboardMode.RunTrends => DashboardDataComponents.Metrics |
                                                    DashboardDataComponents.RunCombats,
@@ -271,8 +274,9 @@ namespace STS2RitsuMetrics.Ui
             {
                 var (taken, deaths, summonHpLost, summonDeaths) =
                     SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
-                var blocked = Metric(player, MetricIds.DamageBlocked);
-                var gained = Metric(player, MetricIds.BlockGained);
+                var incoming = IncomingDamageAnalysis.Create(snapshot, player);
+                var blocked = incoming.EffectiveBlock;
+                var gained = incoming.BlockGained;
                 var energy = Metric(player, MetricIds.EnergySpent);
                 var cards = Metric(player, MetricIds.CardsPlayed);
                 var accent = playerAccents[player.PlayerKey];
@@ -284,11 +288,20 @@ namespace STS2RitsuMetrics.Ui
                     $"{ModLocalization.Get("analysis.hpLost", "HP lost")} {Format(taken)}  ·  " +
                     $"{ModLocalization.Get("analysis.blocked", "blocked")} {Format(blocked)}",
                     taken, blocked, context.Style.NegativeColor, context.Style.PositiveColor, context.Style));
-                content.AddChild(MetricGrid(context.Style,
-                [
+                var defenseRatioHint = ModLocalization.Get("analysis.defenseRatios.hint",
+                    "HP loss ratio = HP lost / (HP lost + effective block). Unspent block becomes final waste " +
+                    "only after combat ends.");
+                var statistics = new List<StatCell>
+                {
+                    Stat("analysis.effectiveBlock", "Effective block", incoming.EffectiveBlock,
+                        context.Style.PositiveColor),
                     Stat("analysis.blockGained", "Block gained", gained, context.Style.PositiveColor),
                     Stat("analysis.blockEfficiency", "Block efficiency", gained > 0m ? blocked / gained * 100m : 0m,
                         accent, "%"),
+                    Stat("analysis.unspentBlock", "Unspent block", incoming.UnspentBlock,
+                        context.Style.WarningColor, detail: defenseRatioHint),
+                    Stat("analysis.hpLossRatio", "HP loss ratio", incoming.HpLossRatio * 100m,
+                        context.Style.NegativeColor, "%", defenseRatioHint),
                     Stat("analysis.healing", "Healing", Metric(player, MetricIds.HealingReceived),
                         context.Style.PositiveColor),
                     Stat("analysis.energySpent", "Energy spent", energy, Accent(context.Style, 3)),
@@ -305,8 +318,17 @@ namespace STS2RitsuMetrics.Ui
                         context.Style.WarningColor),
                     Stat("analysis.summonDeaths", "Summon deaths", summonDeaths,
                         context.Style.WarningColor),
-                ]));
-                AddIncomingSources(content, snapshot, player, context.Style);
+                };
+                if (incoming.HasCompleteHpTimeline)
+                {
+                    statistics.Insert(5, Stat("analysis.selfHpLost", "Self-inflicted HP loss",
+                        incoming.SelfHpLost, context.Style.WarningColor));
+                    statistics.Insert(6, Stat("analysis.selfHpLossRatio", "Self-inflicted share",
+                        incoming.SelfHpLossRatio * 100m, context.Style.WarningColor, "%"));
+                }
+
+                content.AddChild(MetricGrid(context.Style, statistics));
+                AddIncomingSources(content, incoming, context.Style);
                 Rows.AddChild(Surface(content, context.Style, accent));
             }
 
@@ -649,40 +671,18 @@ namespace STS2RitsuMetrics.Ui
                 records.Count, combats.Count);
         }
 
-        private static void AddIncomingSources(VBoxContainer content, CombatSnapshot snapshot,
-            PlayerMetricSnapshot player,
+        private static void AddIncomingSources(VBoxContainer content, IncomingDamageAnalysis incoming,
             DashboardStyleDefinition style)
         {
-            var timelineSources = Timeline(snapshot)
-                .Where(timelineEvent => timelineEvent.Target is
-                {
-                    Kind: AnalyticsEntityKind.Player,
-                    PlayerNetId: not null,
-                } && timelineEvent.Target.PlayerNetId == player.PlayerNetId)
-                .Select(timelineEvent => new
-                {
-                    timelineEvent.Source,
-                    Value = SnapshotStatistics.EffectiveHpLost(timelineEvent),
-                })
-                .Where(item => item.Source != null && item.Value > 0m)
-                .GroupBy(item => item.Source!.Key, StringComparer.Ordinal)
-                .Select(group => new IncomingSource(group.First().Source!.DisplayName,
-                    group.Sum(item => item.Value), group.Count()))
-                .OrderByDescending(source => source.Value)
-                .ToArray();
-            var sources = timelineSources.Length > 0
-                ? timelineSources
-                : player.Sources.GetValueOrDefault(MetricIds.DamageTaken, [])
-                    .Select(source => new IncomingSource(source.DisplayName, source.Value, source.Occurrences))
-                    .ToArray();
-            if (sources.Length == 0)
+            if (incoming.Sources.Count == 0)
                 return;
-            content.AddChild(Label(ModLocalization.Get("analysis.incomingSources", "Top incoming sources"), style,
-                true));
-            var maximum = Math.Max(1m, sources.Max(source => source.Value));
-            foreach (var source in sources.Take(5))
-                content.AddChild(Meter(source.Name, $"{Format(source.Value)} · ×{source.Occurrences}",
-                    source.Value, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
+            content.AddChild(Label(ModLocalization.Get("analysis.incomingHpSources", "Top HP-loss sources"),
+                style, true));
+            var maximum = Math.Max(1m, incoming.Sources.Max(source => source.HpLost));
+            foreach (var source in incoming.Sources.Take(5))
+                content.AddChild(Meter(source.Name,
+                    $"{Format(source.HpLost)} · {source.Share:P1} · ×{source.Occurrences}",
+                    source.HpLost, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
         }
 
         private static VariableReconciledRow CardEffectVirtualRow(
@@ -831,7 +831,7 @@ namespace STS2RitsuMetrics.Ui
                 value.Modulate = ColorOf(cell.Color);
                 box.AddChild(value);
                 box.AddChild(TruncatedLabel(cell.Caption, style, true, Math.Max(9, style.FontSize - 2)));
-                DashboardTooltip.SetValue(box, cell.Caption, cell.Value, detail: cell.ValueText);
+                DashboardTooltip.SetValue(box, cell.Caption, cell.Value, detail: cell.Detail ?? cell.ValueText);
                 grid.AddChild(box);
             }
 
@@ -925,9 +925,15 @@ namespace STS2RitsuMetrics.Ui
             return turn <= 0 ? ModLocalization.Get("dashboard.setupShort", "SETUP") : $"T{turn}";
         }
 
-        private static StatCell Stat(string key, string fallback, decimal value, string color, string suffix = "")
+        private static StatCell Stat(
+            string key,
+            string fallback,
+            decimal value,
+            string color,
+            string suffix = "",
+            string? detail = null)
         {
-            return new(ModLocalization.Get(key, fallback), Format(value) + suffix, value, color);
+            return new(ModLocalization.Get(key, fallback), Format(value) + suffix, value, color, detail);
         }
 
         private static Dictionary<string, SourceRollup>.ValueCollection AggregatePlayerSources(
@@ -1126,11 +1132,14 @@ namespace STS2RitsuMetrics.Ui
             internal decimal Total => Enabled + Execution;
         }
 
-        private sealed record StatCell(string Caption, string ValueText, decimal Value, string Color);
+        private sealed record StatCell(
+            string Caption,
+            string ValueText,
+            decimal Value,
+            string Color,
+            string? Detail = null);
 
         private sealed record NamedValue(string Name, decimal Value);
-
-        private sealed record IncomingSource(string Name, decimal Value, int Occurrences);
 
         private sealed record RecordRow(string LocalizationKey, string Fallback, string Detail, decimal Value);
 

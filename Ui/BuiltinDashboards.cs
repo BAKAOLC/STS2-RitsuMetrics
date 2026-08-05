@@ -380,7 +380,7 @@ namespace STS2RitsuMetrics.Ui
             Toolbar.AddChild(_pageNext);
         }
 
-        private void HidePagingControls()
+        protected void HidePagingControls()
         {
             _pageRefresh = null;
             if (!_pagingControlsAdded)
@@ -1461,7 +1461,13 @@ namespace STS2RitsuMetrics.Ui
 
         protected void Empty(DashboardRenderContext context, string text = "No combat data")
         {
-            Rows.AddChild(CreateEmptyRow(context, text));
+            if (ReconcileRowsOnRefresh)
+                ReconcileRows(
+                [
+                    new("__empty", EmptyRowFingerprint(context, text), () => CreateEmptyRow(context, text)),
+                ]);
+            else
+                Rows.AddChild(CreateEmptyRow(context, text));
             Status.Text = string.Empty;
         }
 
@@ -2113,6 +2119,10 @@ namespace STS2RitsuMetrics.Ui
 
     internal sealed class ReceivedDamageRenderer : DashboardRendererBase
     {
+        private bool _historyExpanded;
+        private string? _historySnapshotKey;
+        private DashboardRenderContext? _lastContext;
+
         protected override bool ReconcileRowsOnRefresh => true;
 
         public override DashboardDataRequirements GetDataRequirements(
@@ -2122,6 +2132,7 @@ namespace STS2RitsuMetrics.Ui
             return new(DashboardDataComponents.Metrics | DashboardDataComponents.Timeline,
             [
                 MetricIds.DamageBlocked,
+                MetricIds.BlockGained,
                 MetricIds.DamageTaken,
                 MetricIds.Deaths,
                 MetricIds.SummonDamageTaken,
@@ -2138,6 +2149,14 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
+            _lastContext = context;
+            var historySnapshotKey = $"{context.Scope}\u001f{snapshot.RunId}\u001f{snapshot.CombatId}";
+            if (!string.Equals(_historySnapshotKey, historySnapshotKey, StringComparison.Ordinal))
+            {
+                _historySnapshotKey = historySnapshotKey;
+                _historyExpanded = false;
+            }
+
             var totalTaken = snapshot.Players.Sum(item => SnapshotStatistics.Survival(snapshot, item.PlayerNetId)
                 .PlayerHpLost);
             var ranked = snapshot.Players.OrderByDescending(item =>
@@ -2149,11 +2168,15 @@ namespace STS2RitsuMetrics.Ui
                 var player = ranked[index];
                 var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var taken = survival.PlayerHpLost;
-                var blocked = Metric(player, MetricIds.DamageBlocked);
+                var incoming = IncomingDamageAnalysis.Create(snapshot, player);
+                var blocked = incoming.EffectiveBlock;
                 var accent = playerAccents[player.PlayerKey];
                 var rank = index + 1;
                 var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style), player.PlayerKey,
-                    rank, taken, totalTaken, blocked, survival, accent,
+                    rank, taken, totalTaken, blocked, survival, incoming.HpLossRatio, incoming.SelfHpLost,
+                    incoming.SelfHpLossRatio, incoming.BlockGained, incoming.UnspentBlock,
+                    string.Join('\u001d', incoming.Sources.Select(source =>
+                        $"{source.Key}\u001c{source.HpLost}\u001c{source.Occurrences}")), accent,
                     DashboardPresentation.SingleLine(context.Parameters));
                 rows.Add(new(new($"player:{player.PlayerKey}", fingerprint, () =>
                 {
@@ -2169,63 +2192,189 @@ namespace STS2RitsuMetrics.Ui
                         context.Style.NegativeColor,
                         Accent(context.Style, 1),
                         context.Style));
+                    var defenseRatioHint = ModLocalization.Get("analysis.defenseRatios.hint",
+                        "HP loss ratio = HP lost / (HP lost + effective block). Unspent block becomes final " +
+                        "waste only after combat ends.");
+                    var statistics = ResponsiveGrid(2, 150f, 8, 6);
+                    statistics.AddChild(IncomingStat(
+                        ModLocalization.Get("analysis.effectiveBlock", "Effective block"),
+                        Format(incoming.EffectiveBlock), context.Style.PositiveColor, context.Style));
+                    statistics.AddChild(IncomingStat(
+                        ModLocalization.Get("analysis.unspentBlock", "Unspent block"),
+                        Format(incoming.UnspentBlock), context.Style.WarningColor, context.Style,
+                        defenseRatioHint));
+                    statistics.AddChild(IncomingStat(
+                        ModLocalization.Get("analysis.hpLossRatio", "HP loss ratio"),
+                        $"{incoming.HpLossRatio:P1}", context.Style.NegativeColor, context.Style,
+                        defenseRatioHint));
+                    if (incoming.HasCompleteHpTimeline)
+                        statistics.AddChild(IncomingStat(
+                            ModLocalization.Get("analysis.selfHpLost", "Self-inflicted HP loss"),
+                            $"{Format(incoming.SelfHpLost)} · {incoming.SelfHpLossRatio:P1}",
+                            context.Style.WarningColor, context.Style));
+                    card.AddChild(statistics);
+                    if (incoming.Sources.Count > 0)
+                    {
+                        card.AddChild(Label(ModLocalization.Get("analysis.incomingHpSources",
+                            "Top HP-loss sources"), context.Style, true));
+                        var maximum = Math.Max(1m, incoming.Sources.Max(source => source.HpLost));
+                        foreach (var source in incoming.Sources.Take(5))
+                            card.AddChild(Meter(source.Name,
+                                $"{Format(source.HpLost)} · {source.Share:P1} · ×{source.Occurrences}",
+                                source.HpLost, maximum, context.Style.NegativeColor, context.Style,
+                                Math.Max(22, context.Style.RowHeight - 8)));
+                    }
+
                     if (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 })
                         card.AddChild(WrappedLabel(ModLocalization.Format("dashboard.received.summonSummary",
                                 "Summons: {0} HP lost · {1} deaths", Format(survival.SummonHpLost),
                                 survival.SummonDeaths),
                             context.Style, true, Math.Max(10, context.Style.FontSize - 1)));
                     return Surface(card, context.Style, accent);
-                }), survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 } ? 126f : 96f));
+                }), 205f + incoming.Sources.Take(5).Count() * Math.Max(26, context.Style.RowHeight - 4) +
+                    (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 } ? 30f : 0f)));
             }
 
-            rows.Add(new(new("__history_title", VisualStyleFingerprint(context.Style), () =>
-            {
-                var historyTitle = Label(ModLocalization.Get("dashboard.incomingHistory", "INCOMING HISTORY"),
-                    context.Style, true, context.Style.FontSize - 1);
-                historyTitle.Modulate = ColorOf(context.Style.WarningColor);
-                return historyTitle;
-            }), context.Style.RowHeight));
             var timeline = Timeline(snapshot);
             var events = new List<CombatTimelineEvent>(Math.Min(200, timeline.Count));
             for (var index = timeline.Count - 1; index >= 0; index--)
             {
                 var timelineEvent = timeline[index];
-                if (timelineEvent.Kind is not (CombatTimelineKind.Damage or CombatTimelineKind.HpLoss or
-                        CombatTimelineKind.Execution or CombatTimelineKind.Death) ||
-                    timelineEvent.Target?.Kind is not (AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon))
+                if (!IsReceivedDamageEvent(timelineEvent))
                     continue;
                 events.Add(timelineEvent);
             }
 
-            var visibleEvents = PageItems(events, context, 200, 50);
+            var historyTitle = ModLocalization.Format("dashboard.incomingHistory.count",
+                "Incoming history ({0})", events.Count);
+            rows.Add(new(new("__history_title",
+                string.Join('\u001e', VisualStyleFingerprint(context.Style), historyTitle, _historyExpanded),
+                () => IncomingHistoryHeader(historyTitle, _historyExpanded, context.Style, ToggleHistory)),
+                context.Style.RowHeight + 7f));
+            IReadOnlyList<CombatTimelineEvent> visibleEvents;
+            if (_historyExpanded)
+                visibleEvents = PageItems(events, context, 200, 50);
+            else
+            {
+                HidePagingControls();
+                visibleEvents = [];
+            }
+
             // ReSharper disable once LoopCanBeConvertedToQuery
             foreach (var timelineEvent in visibleEvents)
             {
                 var fingerprint = string.Join('\u001e', VisualStyleFingerprint(context.Style),
                     timelineEvent.TurnIndex, timelineEvent.Target?.DisplayName,
-                    timelineEvent.Source?.DisplayName, timelineEvent.DisplayText, timelineEvent.Value);
+                    timelineEvent.Source?.DisplayName, timelineEvent.DisplayText, timelineEvent.Value,
+                    timelineEvent.Damage?.HpLost, timelineEvent.Damage?.BlockedAmount);
                 rows.Add(new(new($"history:{timelineEvent.EventId}", fingerprint, () =>
                 {
-                    var value = timelineEvent.Value is { } amount ? Format(amount) : string.Empty;
+                    var hpLost = SnapshotStatistics.EffectiveHpLost(timelineEvent);
+                    var blockedAmount = timelineEvent.Damage?.BlockedAmount ?? 0m;
+                    var value = ReceivedHistoryValue(hpLost, blockedAmount);
+                    var source = timelineEvent.Source?.DisplayName ?? timelineEvent.DisplayText;
+                    var target = timelineEvent.Target?.DisplayName ?? string.Empty;
+                    var descriptionText = ModLocalization.Format("dashboard.received.historyDirection",
+                        "{0} → {1}", source, target);
                     var historyRow =
                         new HBoxContainer { CustomMinimumSize = new(0, context.Style.RowHeight - 3) };
                     historyRow.AddChild(Label($"T{timelineEvent.TurnIndex}", context.Style, true));
-                    var description = TruncatedLabel($"{timelineEvent.Target?.DisplayName} ← " +
-                                                     $"{timelineEvent.Source?.DisplayName ??
-                                                        timelineEvent.DisplayText}",
-                        context.Style);
+                    var description = TruncatedLabel(descriptionText, context.Style);
                     historyRow.AddChild(description);
-                    var amountLabel = Label(value, context.Style, false, context.Style.FontSize + 2);
-                    amountLabel.Modulate = ColorOf(context.Style.NegativeColor);
+                    var amountLabel = Label(value, context.Style, false, context.Style.FontSize + 1);
+                    amountLabel.Modulate = ColorOf(hpLost > 0m
+                        ? context.Style.NegativeColor
+                        : context.Style.PositiveColor);
                     amountLabel.HorizontalAlignment = HorizontalAlignment.Right;
                     historyRow.AddChild(amountLabel);
-                    return Surface(historyRow, context.Style, context.Style.NegativeColor, 5);
+                    return Surface(historyRow, context.Style, hpLost > 0m
+                        ? context.Style.NegativeColor
+                        : context.Style.PositiveColor, 5);
                 }), context.Style.RowHeight + 7f));
             }
 
             ReconcileRows(rows.Select(row => row.Row));
             Status.Text = ModLocalization.Format("dashboard.received.status", "{0} · incoming damage history",
                 snapshot.EncounterName);
+        }
+
+        private static Button IncomingHistoryHeader(
+            string title,
+            bool expanded,
+            DashboardStyleDefinition style,
+            Action toggle)
+        {
+            var button = new Button
+            {
+                Text = title,
+                Alignment = HorizontalAlignment.Left,
+                CustomMinimumSize = new(0f, style.RowHeight + 3f),
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                FocusMode = Control.FocusModeEnum.None,
+                TooltipText = ModLocalization.Get(expanded ? "overlay.collapse" : "overlay.expand",
+                    expanded ? "Collapse" : "Expand"),
+            };
+            DashboardControlTheme.ApplyButton(button, DashboardButtonKind.Subtle, true, style);
+            DashboardIcons.Apply(button, expanded ? DashboardIcon.Collapse : DashboardIcon.Expand, 17);
+            button.Pressed += toggle;
+            return button;
+        }
+
+        private void ToggleHistory()
+        {
+            _historyExpanded = !_historyExpanded;
+            if (_lastContext == null)
+                return;
+            var scrollPosition = Scroll.ScrollVertical;
+            Refresh(_lastContext);
+            Callable.From(() => Scroll.ScrollVertical = scrollPosition).CallDeferred();
+        }
+
+        internal static bool IsReceivedDamageEvent(CombatTimelineEvent timelineEvent)
+        {
+            ArgumentNullException.ThrowIfNull(timelineEvent);
+            if (timelineEvent.Kind is not (CombatTimelineKind.Damage or CombatTimelineKind.HpLoss or
+                    CombatTimelineKind.Execution) ||
+                timelineEvent.Target?.Kind is not (AnalyticsEntityKind.Player or AnalyticsEntityKind.Summon))
+                return false;
+            return SnapshotStatistics.EffectiveHpLost(timelineEvent) > 0m ||
+                   timelineEvent.Damage?.BlockedAmount > 0m;
+        }
+
+        private static Control IncomingStat(
+            string caption,
+            string value,
+            string color,
+            DashboardStyleDefinition style,
+            string? tooltip = null)
+        {
+            var box = new VBoxContainer
+            {
+                CustomMinimumSize = new(150f, 42f),
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                TooltipText = tooltip ?? caption,
+            };
+            box.AddThemeConstantOverride("separation", -2);
+            var valueLabel = TruncatedLabel(value, style, false, style.FontSize + 2);
+            valueLabel.Modulate = ColorOf(color);
+            if (tooltip != null)
+                valueLabel.TooltipText = tooltip;
+            box.AddChild(valueLabel);
+            var captionLabel = TruncatedLabel(caption, style, true, Math.Max(9, style.FontSize - 2));
+            if (tooltip != null)
+                captionLabel.TooltipText = tooltip;
+            box.AddChild(captionLabel);
+            return box;
+        }
+
+        private static string ReceivedHistoryValue(decimal hpLost, decimal blocked)
+        {
+            if (hpLost > 0m && blocked > 0m)
+                return ModLocalization.Format("dashboard.received.historyValue",
+                    "Lost {0} HP · Blocked {1}", Format(hpLost), Format(blocked));
+            if (hpLost > 0m)
+                return ModLocalization.Format("dashboard.received.historyHpLost", "Lost {0} HP", Format(hpLost));
+            return ModLocalization.Format("dashboard.received.historyBlocked", "Blocked {0}", Format(blocked));
         }
     }
 
