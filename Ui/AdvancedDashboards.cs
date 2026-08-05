@@ -39,8 +39,6 @@ namespace STS2RitsuMetrics.Ui
                 [
                     MetricIds.DamageDealt,
                     MetricIds.DamageContribution,
-                    MetricIds.EffectiveHpDamageDealt,
-                    MetricIds.EffectiveHpDamageContribution,
                     MetricIds.DamageAmplified,
                     MetricIds.Overkill,
                 ]);
@@ -200,10 +198,10 @@ namespace STS2RitsuMetrics.Ui
             }
 
             var allSources = AggregateSources(snapshot.Players, true)
-                .Where(source => SourceMetric(source, MetricIds.EffectiveHpDamageDealt) > 0m ||
-                                 SourceMetric(source, MetricIds.EffectiveHpDamageContribution) > 0m)
-                .OrderByDescending(source => SourceMetric(source, MetricIds.EffectiveHpDamageContribution))
-                .ThenByDescending(source => SourceMetric(source, MetricIds.EffectiveHpDamageDealt))
+                .Where(source => SourceAnalysisMetrics(source).Length > 0)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution))
+                .ThenByDescending(source => SourceMetric(source, MetricIds.DamageDealt))
+                .ThenByDescending(source => SourceMetric(source, MetricIds.DamageAmplified))
                 .ToArray();
             if (allSources.Length == 0)
             {
@@ -212,29 +210,20 @@ namespace STS2RitsuMetrics.Ui
             }
 
             var sources = PageItems(allSources, context, 40);
-            var offenseMetrics = new[]
-            {
-                MetricIds.DamageDealt,
-                MetricIds.EffectiveHpDamageDealt,
-                MetricIds.DamageContribution,
-                MetricIds.EffectiveHpDamageContribution,
-                MetricIds.DamageAmplified,
-                MetricIds.Overkill,
-            };
-            var adTitle = ModLocalization.Get("overview.topSources.hpAd", "Top HP damage sources");
-            var rdTitle = ModLocalization.Get("overview.topSources.hpRd", "Top HP attribution sources");
-            var adChartData = allSources.Where(source => SourceMetric(source, MetricIds.EffectiveHpDamageDealt) > 0m)
-                .OrderByDescending(source => SourceMetric(source, MetricIds.EffectiveHpDamageDealt)).Take(12)
+            var adTitle = ModLocalization.Get("overview.topSources.ad", "Top applied sources (AD)");
+            var rdTitle = ModLocalization.Get("overview.topSources.rd", "Top responsibility sources (RD)");
+            var adChartData = allSources.Where(source => SourceMetric(source, MetricIds.DamageDealt) > 0m)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageDealt)).Take(12)
                 .Select(source => new DashboardBarDatum(source.Name,
-                    SourceMetric(source, MetricIds.EffectiveHpDamageDealt), SourceColor(source.Kind, context.Style),
-                    Format(SourceMetric(source, MetricIds.EffectiveHpDamageDealt)))).ToArray();
+                    SourceMetric(source, MetricIds.DamageDealt), SourceColor(source.Kind, context.Style),
+                    Format(SourceMetric(source, MetricIds.DamageDealt)))).ToArray();
             var rdChartData = allSources
-                .Where(source => SourceMetric(source, MetricIds.EffectiveHpDamageContribution) > 0m)
-                .OrderByDescending(source => SourceMetric(source, MetricIds.EffectiveHpDamageContribution)).Take(12)
+                .Where(source => SourceMetric(source, MetricIds.DamageContribution) > 0m)
+                .OrderByDescending(source => SourceMetric(source, MetricIds.DamageContribution)).Take(12)
                 .Select(source => new DashboardBarDatum(source.Name,
-                    SourceMetric(source, MetricIds.EffectiveHpDamageContribution),
+                    SourceMetric(source, MetricIds.DamageContribution),
                     SourceColor(source.Kind, context.Style),
-                    Format(SourceMetric(source, MetricIds.EffectiveHpDamageContribution)))).ToArray();
+                    Format(SourceMetric(source, MetricIds.DamageContribution)))).ToArray();
             var rows = new List<VariableReconciledRow>(sources.Count + 2);
             var chartFingerprint = string.Join('\u001e',
                 VisualStyleFingerprint(context.Style),
@@ -249,8 +238,8 @@ namespace STS2RitsuMetrics.Ui
                 charts.AddChild(BarChartPanel(rdTitle, rdChartData, context.Style));
                 return charts;
             }), 680f));
-            var maximum = Math.Max(1m, allSources.SelectMany(source => offenseMetrics.Select(metricId =>
-                Math.Abs(SourceMetric(source, metricId)))).DefaultIfEmpty().Max());
+            var maximum = Math.Max(1m, allSources.SelectMany(SourceAnalysisMetrics)
+                .Select(metric => Math.Abs(metric.Value)).DefaultIfEmpty().Max());
             var sectionTitle = ModLocalization.Get("analysis.sourceDetails", "Source details");
             var sectionColor = Accent(context.Style, 1);
             rows.Add(new(new("__source_details", string.Join('\u001e',
@@ -260,20 +249,18 @@ namespace STS2RitsuMetrics.Ui
             foreach (var source in sources)
             {
                 var color = SourceColor(source.Kind, context.Style);
-                var metrics = offenseMetrics.Select(metricId => (MetricId: metricId,
-                        Value: SourceMetric(source, metricId)))
-                    .Where(metric => metric.Value != 0m).ToArray();
+                var metrics = SourceAnalysisMetrics(source);
                 var fingerprint = string.Join('\u001e',
                     VisualStyleFingerprint(context.Style),
                     source.Key,
                     source.Kind,
                     source.Name,
                     source.Players.Count,
+                    source.TotalOccurrences,
                     color,
                     maximum,
                     string.Join('\u001d', metrics.Select(metric =>
-                        $"{metric.MetricId}\u001c{MetricName(metric.MetricId)}\u001c{metric.Value}\u001c" +
-                        $"{source.Occurrences.GetValueOrDefault(metric.MetricId)}")));
+                        $"{metric.MetricId}\u001c{MetricName(metric.MetricId)}\u001c{metric.Value}")));
                 rows.Add(new(new($"source:{source.Key}", fingerprint, () =>
                 {
                     var content = new VBoxContainer();
@@ -282,7 +269,7 @@ namespace STS2RitsuMetrics.Ui
                     // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator
                     foreach (var (metricId, value) in metrics)
                         content.AddChild(Meter(MetricName(metricId),
-                            $"{Format(value)}  ·  ×{source.Occurrences.GetValueOrDefault(metricId)}",
+                            Format(value),
                             Math.Abs(value), maximum, MetricColor(metricId, context.Style), context.Style,
                             Math.Max(23, context.Style.RowHeight - 7)));
                     return Surface(content, context.Style, color);
@@ -618,8 +605,8 @@ namespace STS2RitsuMetrics.Ui
 
             var ordered = combats.OrderBy(item => item.StartedAtUtc).ToArray();
             var charts = ResponsiveGrid(2, 280f);
-            charts.AddChild(TrendChart(ModLocalization.Get("analysis.hpDamagePerTurn", "HP damage / turn"),
-                CombatTrend(ordered, combat => SnapshotAnalysisCache.Get(combat).HpDamage /
+            charts.AddChild(TrendChart(ModLocalization.Get("analysis.damagePerTurn", "Damage / turn"),
+                CombatTrend(ordered, combat => SnapshotAnalysisCache.Get(combat).AppliedDamage /
                                                Math.Max(1, combat.RoundCount)),
                 context.Style.NegativeColor, context.Style));
             charts.AddChild(TrendChart(ModLocalization.Get("analysis.hpLossRatio", "HP loss ratio"),
@@ -652,8 +639,8 @@ namespace STS2RitsuMetrics.Ui
             if (!_runCombatDetailsExpanded)
             {
                 Status.Text = ModLocalization.Format("analysis.runTrendSummary",
-                    "{0} combats · {1} total HP damage",
-                    combats.Count, Format(combats.Sum(combat => SnapshotAnalysisCache.Get(combat).HpDamage)));
+                    "{0} combats · {1} total damage",
+                    combats.Count, Format(combats.Sum(combat => SnapshotAnalysisCache.Get(combat).AppliedDamage)));
                 return;
             }
 
@@ -668,11 +655,11 @@ namespace STS2RitsuMetrics.Ui
                     context.Style));
                 row.AddChild(TruncatedLabel(combat.EncounterName, context.Style, false,
                     context.Style.FontSize + 1));
-                row.AddChild(CompactMetric(ModLocalization.Get("metric.effectiveHpDamageDealt", "HP damage"),
-                    analysis.HpDamage,
+                row.AddChild(CompactMetric(ModLocalization.Get("analysis.damageDealt", "Applied damage"),
+                    analysis.AppliedDamage,
                     context.Style.NegativeColor, context.Style));
-                row.AddChild(CompactMetric(ModLocalization.Get("analysis.hpDamagePerTurn", "HP damage / turn"),
-                    analysis.HpDamage / rounds, color, context.Style));
+                row.AddChild(CompactMetric(ModLocalization.Get("analysis.damagePerTurn", "Damage / turn"),
+                    analysis.AppliedDamage / rounds, color, context.Style));
                 row.AddChild(CompactMetric(ModLocalization.Get("analysis.hpLost", "HP lost"), analysis.HpLost,
                     context.Style.WarningColor, context.Style));
                 row.AddChild(CompactMetric(ModLocalization.Get("analysis.hpLossRatio", "HP loss ratio"),
@@ -688,8 +675,8 @@ namespace STS2RitsuMetrics.Ui
                 Rows.AddChild(Surface(row, context.Style, padding: 5));
             }
 
-            Status.Text = ModLocalization.Format("analysis.runTrendSummary", "{0} combats · {1} total HP damage",
-                combats.Count, Format(combats.Sum(combat => SnapshotAnalysisCache.Get(combat).HpDamage)));
+            Status.Text = ModLocalization.Format("analysis.runTrendSummary", "{0} combats · {1} total damage",
+                combats.Count, Format(combats.Sum(combat => SnapshotAnalysisCache.Get(combat).AppliedDamage)));
         }
 
         private static IEnumerable<DashboardLineDatum> CombatTrend(
@@ -716,29 +703,29 @@ namespace STS2RitsuMetrics.Ui
             var damageEvents = timeline.Where(item => item.Damage?.AttributionShares?.Any(share =>
                 share.Contributor.Kind == AnalyticsEntityKind.Player) == true).ToArray();
             var records = new List<RecordRow>();
-            AddMaximum(records, RecordGroup.Offense, "analysis.recordHighestHit", "Highest HP-damage hit",
-                damageEvents, item => item.Damage!.HpLost, DamageEventLabel);
+            AddMaximum(records, RecordGroup.Offense, "analysis.recordHighestHit", "Highest applied hit",
+                damageEvents, item => item.Damage!.EffectiveAmount, DamageEventLabel);
             AddMaximum(records, RecordGroup.Efficiency, "analysis.recordHighestOverkill", "Highest overkill",
                 damageEvents, item => item.Damage!.OverkillAmount, DamageEventLabel);
             var turnDamage = damageEvents.GroupBy(item => (item.CombatId, item.TurnIndex))
                 .Select(group => new NamedValue($"T{group.Key.TurnIndex}",
-                    group.Sum(item => item.Damage!.HpLost)))
+                    group.Sum(item => item.Damage!.EffectiveAmount)))
                 .ToArray();
-            AddMaximum(records, RecordGroup.Offense, "analysis.recordBestTurn", "Best HP-damage turn", turnDamage,
+            AddMaximum(records, RecordGroup.Offense, "analysis.recordBestTurn", "Best damage turn", turnDamage,
                 item => item.Value, item => item.Name);
             var playerCombats = combats.SelectMany(combat => combat.Players.Select(player => new NamedValue(
                 $"{player.DisplayName} · {combat.EncounterName}",
-                MetricForDisplay(player, MetricIds.EffectiveHpDamageDealt)))).ToArray();
-            AddMaximum(records, RecordGroup.Offense, "analysis.recordBestCombat", "Best player HP-damage combat",
+                MetricForDisplay(player, MetricIds.DamageDealt)))).ToArray();
+            AddMaximum(records, RecordGroup.Offense, "analysis.recordBestCombat", "Best player damage combat",
                 playerCombats, item => item.Value, item => item.Name);
             var cardSources = combats.SelectMany(combat => combat.Players)
                 .SelectMany(player => AggregatePlayerSources(player, true))
                 .Where(source => source.Kind == AnalyticsSourceKind.Card)
                 .GroupBy(source => source.Name, StringComparer.CurrentCulture)
                 .Select(group => new NamedValue(group.Key,
-                    group.Sum(source => source.Totals.GetValueOrDefault(MetricIds.EffectiveHpDamageDealt))))
+                    group.Sum(source => source.Totals.GetValueOrDefault(MetricIds.DamageDealt))))
                 .ToArray();
-            AddMaximum(records, RecordGroup.Offense, "analysis.recordTopCard", "Top HP-damage card", cardSources,
+            AddMaximum(records, RecordGroup.Offense, "analysis.recordTopCard", "Top damage card", cardSources,
                 item => item.Value, item => item.Name);
             var contributions = damageEvents.SelectMany(item => item.Damage!.Contributions).ToArray();
             AddMaximum(records, RecordGroup.Offense, "analysis.recordAmplifier", "Largest amplification", contributions
@@ -834,13 +821,12 @@ namespace STS2RitsuMetrics.Ui
         {
             var color = SourceColor(source.Kind, style);
             var damage = source.Totals.GetValueOrDefault(MetricIds.DamageDealt);
-            var hpDamage = source.Totals.GetValueOrDefault(MetricIds.EffectiveHpDamageDealt);
             var plays = source.Totals.GetValueOrDefault(MetricIds.CardsPlayed);
             var energy = source.Totals.GetValueOrDefault(MetricIds.EnergySpent);
             var enabled = source.Totals.GetValueOrDefault(MetricIds.DamageAmplified);
             var defense = source.Totals.GetValueOrDefault(MetricIds.DefenseContribution);
             var healing = source.Totals.GetValueOrDefault(MetricIds.HealingContribution);
-            var totalImpact = hpDamage + enabled + defense;
+            var totalImpact = damage + enabled + defense + healing;
             var box = new VBoxContainer();
             box.AddThemeConstantOverride("separation", 4);
             var header = new HBoxContainer();
@@ -853,21 +839,21 @@ namespace STS2RitsuMetrics.Ui
             box.AddChild(MetricGrid(style, card
                 ?
                 [
-                    Stat("metric.effectiveHpDamageDealt", "HP damage", hpDamage, style.NegativeColor),
                     Stat("analysis.damageDealt", "Applied damage", damage, style.NegativeColor),
                     Stat("analysis.cardsPlayed", "Plays", plays, Accent(style, 3)),
                     Stat("analysis.energySpent", "Energy", energy, Accent(style, 1)),
-                    Stat("analysis.hpDamagePerPlay", "HP damage / play", plays > 0m ? hpDamage / plays : 0m,
+                    Stat("analysis.damagePerPlay", "Damage / play", plays > 0m ? damage / plays : 0m,
                         color),
-                    Stat("analysis.hpDamagePerEnergy", "HP damage / energy", energy > 0m ? hpDamage / energy : 0m,
+                    Stat("analysis.damagePerEnergy", "Damage / energy", energy > 0m ? damage / energy : 0m,
                         color),
                     Stat("metric.defenseContribution", "Defense contribution", defense, style.PositiveColor),
+                    Stat("metric.healingContribution", "Effective healing", healing, style.PositiveColor),
                     Stat("analysis.overkill", "Overkill", source.Totals.GetValueOrDefault(MetricIds.Overkill),
                         style.WarningColor),
                 ]
                 :
                 [
-                    Stat("metric.effectiveHpDamageDealt", "HP damage", hpDamage, style.NegativeColor),
+                    Stat("analysis.damageDealt", "Applied damage", damage, style.NegativeColor),
                     Stat("analysis.damageAmplified", "Damage enabled", enabled, Accent(style, 4)),
                     Stat("metric.damagePrevented", "Damage prevented",
                         source.Totals.GetValueOrDefault(MetricIds.DamagePrevented), style.PositiveColor),
@@ -936,6 +922,7 @@ namespace STS2RitsuMetrics.Ui
             header.AddThemeConstantOverride("separation", 7);
             header.AddChild(Badge(DashboardLocalization.SourceKind(source.Kind), color, style, 78));
             header.AddChild(TruncatedLabel(source.Name, style, false, style.FontSize + 1));
+            header.AddChild(Label($"×{source.TotalOccurrences}", style, true));
             header.AddChild(Label(ModLocalization.Format("analysis.sourcePlayers", "{0} players", source.Players.Count),
                 style, true));
             return header;
@@ -1112,8 +1099,6 @@ namespace STS2RitsuMetrics.Ui
                 {
                     MetricIds.DamageDealt,
                     MetricIds.DamageContribution,
-                    MetricIds.EffectiveHpDamageDealt,
-                    MetricIds.EffectiveHpDamageContribution,
                     MetricIds.DamageAmplified,
                     MetricIds.Overkill,
                 }.Select(metricId => (MetricId: metricId,
@@ -1178,6 +1163,24 @@ namespace STS2RitsuMetrics.Ui
             return source.Totals.GetValueOrDefault(metricId);
         }
 
+        private static (string MetricId, decimal Value)[] SourceAnalysisMetrics(SourceRollup source)
+        {
+            var applied = SourceMetric(source, MetricIds.DamageDealt);
+            var responsibility = SourceMetric(source, MetricIds.DamageContribution);
+            var amplified = SourceMetric(source, MetricIds.DamageAmplified);
+            var metrics = new List<(string MetricId, decimal Value)>(4);
+            if (applied != 0m)
+                metrics.Add((MetricIds.DamageDealt, applied));
+            if (responsibility != 0m && (applied != 0m || amplified == 0m || responsibility != amplified))
+                metrics.Add((MetricIds.DamageContribution, responsibility));
+            if (amplified != 0m)
+                metrics.Add((MetricIds.DamageAmplified, amplified));
+            var overkill = SourceMetric(source, MetricIds.Overkill);
+            if (overkill != 0m)
+                metrics.Add((MetricIds.Overkill, overkill));
+            return metrics.ToArray();
+        }
+
         private static string MetricName(string metricId)
         {
             var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metricId);
@@ -1190,8 +1193,8 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
-                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.EffectiveHpDamageDealt or
-                    MetricIds.EffectiveHpDamageContribution or MetricIds.DamageTaken or MetricIds.Overkill =>
+                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.DamageTaken or
+                    MetricIds.Overkill =>
                     style.NegativeColor,
                 MetricIds.DamageBlocked or MetricIds.BlockGained or MetricIds.HealingReceived or
                     MetricIds.DamageMitigated => style.PositiveColor,
