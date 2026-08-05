@@ -264,6 +264,27 @@ namespace STS2RitsuMetrics.Ui
 
             CompactSubtitle = null;
             Render(context);
+            var components = GetDataRequirements(context.Scope, context.Parameters).Components;
+            var droppedObservations = components.HasFlag(DashboardDataComponents.Events)
+                ? context.Snapshot?.DroppedObservationCount ?? 0
+                : 0;
+            var droppedTimelineEvents = components.HasFlag(DashboardDataComponents.Timeline)
+                ? context.Snapshot?.DroppedTimelineEventCount ?? 0
+                : 0;
+            if (droppedObservations > 0 || droppedTimelineEvents > 0)
+            {
+                var notice = ModLocalization.Get("analysis.incompleteDetails", "Detailed data is incomplete");
+                Status.Text = string.IsNullOrWhiteSpace(Status.Text) ? notice : $"{Status.Text} · {notice}";
+                Status.TooltipText = ModLocalization.Format("analysis.incompleteDetails.hint",
+                    "Capture limits omitted {0} metric observations and {1} timeline events. Aggregate totals remain complete.",
+                    droppedObservations, droppedTimelineEvents);
+                Status.Modulate = ColorOf(context.Style.WarningColor);
+            }
+            else
+            {
+                Status.TooltipText = string.Empty;
+                Status.Modulate = ColorOf(context.Style.SecondaryTextColor);
+            }
             Rows.CustomMinimumSize = new(Rows.CustomMinimumSize.X, 0f);
             Scroll.InvalidateContentSize();
         }
@@ -422,9 +443,9 @@ namespace STS2RitsuMetrics.Ui
             static ReconciledRow Spacer(string key, float height)
             {
                 return new(key, "spacer", () => new()
-                    {
-                        MouseFilter = Control.MouseFilterEnum.Ignore,
-                    },
+                {
+                    MouseFilter = Control.MouseFilterEnum.Ignore,
+                },
                     control =>
                     {
                         var visible = height > 0.5f;
@@ -550,9 +571,9 @@ namespace STS2RitsuMetrics.Ui
         private static ReconciledRow VariableSpacer(string key, float height)
         {
             return new(key, "spacer", () => new()
-                {
-                    MouseFilter = Control.MouseFilterEnum.Ignore,
-                },
+            {
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            },
                 control =>
                 {
                     var visible = height > 0.5f;
@@ -1431,14 +1452,28 @@ namespace STS2RitsuMetrics.Ui
             decimal second,
             string firstColor,
             string secondColor,
-            DashboardStyleDefinition style)
+            DashboardStyleDefinition style,
+            string firstLabel,
+            string secondLabel,
+            string explanation)
         {
             var root = new VBoxContainer();
-            DashboardTooltip.SetValue(root, text, first + second,
-                detail: $"{Format(first)} + {Format(second)}");
+            DashboardTooltip.Set(root,
+            [
+                text,
+                $"{firstLabel}: {Format(first)}",
+                $"{secondLabel}: {Format(second)}",
+                explanation,
+            ]);
             root.AddThemeConstantOverride("separation", 2);
-            root.AddChild(WrappedLabel(text, style));
-            var segments = new HBoxContainer { CustomMinimumSize = new(0, Math.Max(10, style.RowHeight / 2)) };
+            var title = WrappedLabel(text, style);
+            title.MouseFilter = Control.MouseFilterEnum.Ignore;
+            root.AddChild(title);
+            var segments = new HBoxContainer
+            {
+                CustomMinimumSize = new(0, Math.Max(10, style.RowHeight / 2)),
+                MouseFilter = Control.MouseFilterEnum.Ignore,
+            };
             segments.AddThemeConstantOverride("separation", 1);
             var total = Math.Max(1m, first + second);
             var firstSegment = new ColorRect
@@ -1446,12 +1481,14 @@ namespace STS2RitsuMetrics.Ui
                 Color = ColorOf(firstColor),
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                 SizeFlagsStretchRatio = (float)(first / total),
+                MouseFilter = Control.MouseFilterEnum.Ignore,
             };
             var secondSegment = new ColorRect
             {
                 Color = ColorOf(secondColor),
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                 SizeFlagsStretchRatio = (float)(second / total),
+                MouseFilter = Control.MouseFilterEnum.Ignore,
             };
             segments.AddChild(firstSegment);
             segments.AddChild(secondSegment);
@@ -1897,7 +1934,7 @@ namespace STS2RitsuMetrics.Ui
 
             var hasLegacyDamage = snapshot.Players.Any(player => player.Totals.ContainsKey(MetricIds.DamageDealt));
             var hasOutputDamageSemantics = (snapshot.Timeline ?? []).Any(item => item.Damage is
-                { BlockedAmount: > 0m } damage && damage.EffectiveAmount > damage.HpLost);
+            { BlockedAmount: > 0m } damage && damage.EffectiveAmount > damage.HpLost);
             return hasLegacyDamage && !hasOutputDamageSemantics;
         }
 
@@ -2135,8 +2172,6 @@ namespace STS2RitsuMetrics.Ui
                 MetricIds.BlockGained,
                 MetricIds.DamageTaken,
                 MetricIds.Deaths,
-                MetricIds.SummonDamageTaken,
-                MetricIds.SummonDeaths,
             ]);
         }
 
@@ -2168,7 +2203,7 @@ namespace STS2RitsuMetrics.Ui
                 var player = ranked[index];
                 var survival = SnapshotStatistics.Survival(snapshot, player.PlayerNetId);
                 var taken = survival.PlayerHpLost;
-                var incoming = IncomingDamageAnalysis.Create(snapshot, player);
+                var incoming = SnapshotAnalysisCache.Get(snapshot).Incoming(player);
                 var blocked = incoming.EffectiveBlock;
                 var accent = playerAccents[player.PlayerKey];
                 var rank = index + 1;
@@ -2191,7 +2226,12 @@ namespace STS2RitsuMetrics.Ui
                         blocked,
                         context.Style.NegativeColor,
                         Accent(context.Style, 1),
-                        context.Style));
+                        context.Style,
+                        ModLocalization.Get("analysis.hpLost", "HP lost"),
+                        ModLocalization.Get("analysis.effectiveBlock", "Effective block"),
+                        ModLocalization.Get("analysis.hpLossRatio.hint",
+                            "HP loss ratio is HP lost divided by HP lost plus effective block. Lower means " +
+                            "more incoming damage was absorbed.")));
                     var defenseRatioHint = ModLocalization.Get("analysis.defenseRatios.hint",
                         "HP loss ratio = HP lost / (HP lost + effective block). Unspent block becomes final " +
                         "waste only after combat ends.");
@@ -2225,14 +2265,8 @@ namespace STS2RitsuMetrics.Ui
                                 Math.Max(22, context.Style.RowHeight - 8)));
                     }
 
-                    if (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 })
-                        card.AddChild(WrappedLabel(ModLocalization.Format("dashboard.received.summonSummary",
-                                "Summons: {0} HP lost · {1} deaths", Format(survival.SummonHpLost),
-                                survival.SummonDeaths),
-                            context.Style, true, Math.Max(10, context.Style.FontSize - 1)));
                     return Surface(card, context.Style, accent);
-                }), 205f + incoming.Sources.Take(5).Count() * Math.Max(26, context.Style.RowHeight - 4) +
-                    (survival is { SummonHpLost: > 0m } or { SummonDeaths: > 0 } ? 30f : 0f)));
+                }), 205f + incoming.Sources.Take(5).Count() * Math.Max(26, context.Style.RowHeight - 4)));
             }
 
             var timeline = Timeline(snapshot);
@@ -2776,7 +2810,7 @@ namespace STS2RitsuMetrics.Ui
             else
             {
                 row.AddChild(new Control
-                    { CustomMinimumSize = new(40f, 0f), MouseFilter = Control.MouseFilterEnum.Ignore });
+                { CustomMinimumSize = new(40f, 0f), MouseFilter = Control.MouseFilterEnum.Ignore });
             }
 
             var label = TruncatedLabel(RowText(timelineEvent), style,

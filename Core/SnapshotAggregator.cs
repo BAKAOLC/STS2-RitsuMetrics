@@ -15,20 +15,20 @@ namespace STS2RitsuMetrics.Core
                 return null;
             var players = new Dictionary<string, PlayerAccumulator>(StringComparer.Ordinal);
             foreach (var combat in run.Combats)
-            foreach (var player in combat.Players)
-            {
-                if (!players.TryGetValue(player.PlayerKey, out var accumulator))
+                foreach (var player in combat.Players)
                 {
-                    accumulator = new(player);
-                    players.Add(player.PlayerKey, accumulator);
-                }
+                    if (!players.TryGetValue(player.PlayerKey, out var accumulator))
+                    {
+                        accumulator = new(player);
+                        players.Add(player.PlayerKey, accumulator);
+                    }
 
-                accumulator.Add(player);
-            }
+                    accumulator.Add(player);
+                }
 
             var first = run.Combats.MinBy(combat => combat.StartedAtUtc)!;
             var last = run.Combats.MaxBy(combat => combat.StartedAtUtc)!;
-            return new(
+            return new CombatSnapshot(
                 run.RunId,
                 "run-total",
                 last.ActIndex,
@@ -44,7 +44,11 @@ namespace STS2RitsuMetrics.Core
                 includeTimeline
                     ? run.Combats.SelectMany(combat => combat.Timeline ?? []).OrderBy(evt => evt.OccurredAtUtc)
                         .ThenBy(evt => evt.Sequence).ToArray()
-                    : []);
+                    : [])
+            {
+                DroppedObservationCount = run.Combats.Sum(combat => combat.DroppedObservationCount),
+                DroppedTimelineEventCount = run.Combats.Sum(combat => combat.DroppedTimelineEventCount),
+            };
         }
 
         private sealed class PlayerAccumulator(PlayerMetricSnapshot first)

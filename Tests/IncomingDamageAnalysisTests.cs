@@ -99,6 +99,85 @@ namespace STS2RitsuMetrics.Tests
             Assert.Equal(0m, analysis.SelfHpLost);
         }
 
+        [Fact]
+        public void CachedSnapshotAnalysisReusesIncomingAndSummarizesOutcomeQuality()
+        {
+            var totals = PlayerSnapshot(10m, 15m, 20m).Totals.ToDictionary(
+                item => item.Key,
+                item => item.Value,
+                StringComparer.Ordinal);
+            totals[MetricIds.DamageDealt] = 100m;
+            totals[MetricIds.EffectiveHpDamageDealt] = 80m;
+            totals[MetricIds.Overkill] = 10m;
+            totals[MetricIds.HealingReceived] = 5m;
+            totals[MetricIds.CardsPlayed] = 6m;
+            totals[MetricIds.EnergySpent] = 3m;
+            var player = PlayerSnapshot(10m, 15m, 20m) with { Totals = totals };
+            var snapshot = Combat(player, BlockEvent(1, "combat", 20m),
+                DamageEvent(2, "combat",
+                    new("monster", AnalyticsEntityKind.Monster, null, "monster", "Enemy"),
+                    new("move:slash", AnalyticsSourceKind.Creature, "slash", "Slash"), 10m, 15m));
+
+            var first = SnapshotAnalysisCache.Get(snapshot);
+            var second = SnapshotAnalysisCache.Get(snapshot);
+
+            Assert.Same(first, second);
+            Assert.Same(first.Incoming(player), second.Incoming(player));
+            Assert.Equal(20m, first.EnemyBlockedDamage);
+            Assert.Equal(110m, first.DamageOutcomeTotal);
+            Assert.Equal(80m / 110m, first.DamageConversion);
+            Assert.Equal(0.4m, first.HpLossRatio);
+            Assert.Equal(0.75m, first.BlockEfficiency);
+            Assert.Equal(5m, first.UnspentBlock);
+            Assert.Equal(5m, first.Healing);
+            Assert.Equal(6m, first.CardsPlayed);
+            Assert.Equal(3m, first.EnergySpent);
+        }
+
+        [Fact]
+        public void RunAggregatePreservesDetailedDataDropCounts()
+        {
+            var player = PlayerSnapshot(0m, 0m, 0m);
+            var first = Combat(player) with
+            {
+                CombatId = "combat:1",
+                DroppedObservationCount = 3,
+                DroppedTimelineEventCount = 5,
+            };
+            var second = Combat(player) with
+            {
+                CombatId = "combat:2",
+                DroppedObservationCount = 7,
+                DroppedTimelineEventCount = 11,
+            };
+            var run = new RunSnapshot("run", DateTimeOffset.UnixEpoch, null, false, false, null, null,
+                [first, second]);
+
+            var aggregate = SnapshotAggregator.Combine(run);
+
+            Assert.NotNull(aggregate);
+            Assert.True(aggregate.HasIncompleteDetails);
+            Assert.Equal(10, aggregate.DroppedObservationCount);
+            Assert.Equal(16, aggregate.DroppedTimelineEventCount);
+        }
+
+        [Fact]
+        public void CachedTurnsKeepEqualTurnIndexesFromSeparateCombatsDistinct()
+        {
+            var player = PlayerSnapshot(0m, 0m, 1m);
+            var first = Combat(player, BlockEvent(1, "combat:1", 1m)) with { CombatId = "combat:1" };
+            var second = Combat(player, BlockEvent(2, "combat:2", 1m)) with { CombatId = "combat:2" };
+            var run = new RunSnapshot("run", DateTimeOffset.UnixEpoch, null, false, false, null, null,
+                [first, second]);
+            var aggregate = SnapshotAggregator.Combine(run);
+
+            var turns = SnapshotAnalysisCache.Get(Assert.IsType<CombatSnapshot>(aggregate)).Turns;
+
+            Assert.Equal(2, turns.Count);
+            Assert.Equal(["combat:1", "combat:2"], turns.Select(turn => turn.CombatId));
+            Assert.All(turns, turn => Assert.Equal(1, turn.Index));
+        }
+
         private static PlayerMetricSnapshot PlayerSnapshot(decimal hpLost, decimal blocked, decimal blockGained)
         {
             return new(

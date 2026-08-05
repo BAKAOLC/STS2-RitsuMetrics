@@ -851,6 +851,10 @@ namespace STS2RitsuMetrics.Ui
                     metricSelectionKey,
                     includeCompletedCombats)
                 : null;
+            SnapshotAnalysisCache.Precompute(combat);
+            SnapshotAnalysisCache.Precompute(runAggregate);
+            if (includeCompletedCombats && run != null)
+                SnapshotAnalysisCache.Precompute(run.Combats);
             return new(revision, components, needsRunAggregate, metricSelectionKey, change, run, combat,
                 runAggregate);
         }

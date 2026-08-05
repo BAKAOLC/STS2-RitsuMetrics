@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 
 namespace STS2RitsuMetrics.Api
 {
@@ -126,7 +127,14 @@ namespace STS2RitsuMetrics.Api
         int RoundCount,
         IReadOnlyList<PlayerMetricSnapshot> Players,
         IReadOnlyList<MetricObservation> Events,
-        IReadOnlyList<CombatTimelineEvent>? Timeline = null);
+        IReadOnlyList<CombatTimelineEvent>? Timeline = null)
+    {
+        public int DroppedObservationCount { get; init; }
+        public int DroppedTimelineEventCount { get; init; }
+
+        [JsonIgnore]
+        public bool HasIncompleteDetails => DroppedObservationCount > 0 || DroppedTimelineEventCount > 0;
+    }
 
     public sealed record RunPlayerIdentity(
         ulong PlayerNetId,

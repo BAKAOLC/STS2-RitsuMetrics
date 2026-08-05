@@ -218,6 +218,8 @@ namespace STS2RitsuMetrics.Core
                         includeTimeline,
                         selectedCombatId,
                         cancellationToken);
+                    if (run != null)
+                        SnapshotAnalysisCache.Precompute(run.Combats);
                     cancellationToken.ThrowIfCancellationRequested();
                     return run;
                 }, cancellationToken).ConfigureAwait(false);

@@ -74,10 +74,10 @@ namespace STS2RitsuMetrics.Domain
                 Identity = identity ?? snapshot.Identity,
             };
             var active = snapshot.Combats.LastOrDefault(combat => combat is
-                { Completed: false, EndedAtUtc: null });
+            { Completed: false, EndedAtUtc: null });
             session._completedCombats.AddRange(snapshot.Combats
                 .Where(combat => !ReferenceEquals(combat, active) && combat is
-                    { Completed: true } or { EndedAtUtc: not null })
+                { Completed: true } or { EndedAtUtc: not null })
                 .Select(combat => SnapshotCloner.Clone(combat, true)));
             if (active != null)
                 session._activeCombat = MutableCombatSession.Restore(active);
@@ -229,6 +229,8 @@ namespace STS2RitsuMetrics.Domain
                 EncounterName = source.EncounterName,
                 StartedAtUtc = source.StartedAtUtc,
                 RoundCount = source.RoundCount,
+                _droppedEvents = source.DroppedObservationCount,
+                _droppedTimelineEvents = source.DroppedTimelineEventCount,
             };
             session._events.AddRange(source.Events);
             foreach (var observation in source.Events)
@@ -300,6 +302,7 @@ namespace STS2RitsuMetrics.Domain
                 else
                 {
                     _droppedEvents++;
+                    _metadataRevision++;
                 }
             }
         }
@@ -327,7 +330,10 @@ namespace STS2RitsuMetrics.Domain
                 if (_timeline.Count < maxEvents)
                     _timeline.Add(timelineEvent);
                 else
+                {
                     _droppedTimelineEvents++;
+                    _metadataRevision++;
+                }
             }
         }
 
@@ -387,7 +393,11 @@ namespace STS2RitsuMetrics.Domain
                     RoundCount,
                     players,
                     events,
-                    timeline);
+                    timeline)
+                {
+                    DroppedObservationCount = _droppedEvents,
+                    DroppedTimelineEventCount = _droppedTimelineEvents,
+                };
                 if (_cachedSnapshots.Count >= 32)
                     _cachedSnapshots.Clear();
                 _cachedSnapshots[cacheKey] = new(revision, snapshot);
