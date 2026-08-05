@@ -826,14 +826,16 @@ namespace STS2RitsuMetrics.Core
             if (results.Count == 0)
                 return;
             var props = results[0].Props;
-            var cause = calculation?.Cause ?? requestCause ?? CausalScopeRuntime.Snapshot();
-            var source = cause?.Source ?? (damageCardSource != null
-                ? GameDescriptorFactory.Card(damageCardSource)
-                : GameDescriptorFactory.CreatureSource(damageDealer));
+            var capturedCause = calculation?.Cause ?? requestCause ?? CausalScopeRuntime.Snapshot();
+            var cause = ResolveDamageCause(damageCardSource, capturedCause);
+            var cardSource = damageCardSource == null ? null : GameDescriptorFactory.Card(damageCardSource);
+            var source = ResolvePrimaryDamageSource(cardSource, cause,
+                GameDescriptorFactory.CreatureSource(damageDealer));
+            var attributionModel = damageCardSource ?? cause?.Model;
             var directDealer = ResolveDirectDamagePlayer(
                 GameDescriptorFactory.Player(damageDealer),
                 damageCardSource == null ? null : GameDescriptorFactory.Player(damageCardSource.Owner),
-                GameDescriptorFactory.ModelOwner(cause?.Model));
+                GameDescriptorFactory.ModelOwner(attributionModel));
             var dealerEntity = GameDescriptorFactory.CreatureOrNull(damageDealer);
 
             var receiver = GameDescriptorFactory.Creature(damageReceiver);
@@ -845,7 +847,7 @@ namespace STS2RitsuMetrics.Core
             var requested = calculation?.RequestedAmount ?? modified;
             var contributions = BuildContributions(calculation, source, requested, modified, blocked, damageDealt,
                 overkill);
-            var attributionShares = ResolveAttributionShares(damageReceiver, cause?.Model, props,
+            var attributionShares = ResolveAttributionShares(damageReceiver, attributionModel, props,
                 damageDealt, directDealer, source);
             var effectiveHpShares = ScaleShares(attributionShares, hpLost);
             if (directDealer == null && attributionShares.Length > 0)
@@ -971,6 +973,21 @@ namespace STS2RitsuMetrics.Core
             if (cardOwner?.Kind == AnalyticsEntityKind.Player)
                 return cardOwner;
             return causalOwner?.Kind == AnalyticsEntityKind.Player ? causalOwner : null;
+        }
+
+        internal static CausalScopeSnapshot? ResolveDamageCause(
+            CardModel? cardSource,
+            CausalScopeSnapshot? cause)
+        {
+            return cardSource == null && cause?.ActionId == "card.play" ? null : cause;
+        }
+
+        internal static SourceDescriptor ResolvePrimaryDamageSource(
+            SourceDescriptor? cardSource,
+            CausalScopeSnapshot? cause,
+            SourceDescriptor fallback)
+        {
+            return cardSource ?? cause?.Source ?? fallback;
         }
 
         private void RecordOffensiveContributions(

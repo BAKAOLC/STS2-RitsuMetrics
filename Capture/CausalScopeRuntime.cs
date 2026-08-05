@@ -82,8 +82,22 @@ namespace STS2RitsuMetrics.Capture
         {
             if (state == null)
                 return;
-            if (ReferenceEquals(CurrentFrame.Value, state.Frame))
-                CurrentFrame.Value = state.Previous;
+            var current = CurrentFrame.Value;
+            if (current == null)
+                return;
+            var restored = Remove(current, state.Frame.EventId);
+            if (!ReferenceEquals(restored, current))
+                CurrentFrame.Value = restored;
+        }
+
+        private static ScopeFrame? Remove(ScopeFrame frame, string eventId)
+        {
+            if (string.Equals(frame.EventId, eventId, StringComparison.Ordinal))
+                return frame.Parent;
+            if (frame.Parent == null)
+                return frame;
+            var parent = Remove(frame.Parent, eventId);
+            return ReferenceEquals(parent, frame.Parent) ? frame : frame.WithParent(parent);
         }
 
         internal static string? ResolveParentEventId()
@@ -156,6 +170,11 @@ namespace STS2RitsuMetrics.Capture
             internal SourceDescriptor? Source { get; } = source;
             internal string ActionId { get; } = actionId;
             internal bool Materialized { get; set; } = materialized;
+
+            internal ScopeFrame WithParent(ScopeFrame? parent)
+            {
+                return new(EventId, parent, ExplicitParentEventId, Model, Source, ActionId, Materialized);
+            }
         }
     }
 }
