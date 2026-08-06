@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using Godot;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
+using MegaCrit.Sts2.Core.Nodes.Screens.ScreenContext;
 using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib.Ui.Shell.Theme;
 using STS2RitsuMetrics.Api;
@@ -90,6 +92,7 @@ namespace STS2RitsuMetrics.Ui
             ModLocalization.Changed += OnLocalizationChanged;
             ModData.HistoryReady += OnHistoryReady;
             ModData.SettingsChanged += OnSettingsChanged;
+            ActiveScreenContext.Instance.Updated += ScheduleVisibilityUpdate;
             LoadWindows();
             DrainOpenRequests();
             if (_windows.Count == 0 && ModData.Settings.OverlayEnabled)
@@ -115,6 +118,7 @@ namespace STS2RitsuMetrics.Ui
             ModLocalization.Changed -= OnLocalizationChanged;
             ModData.HistoryReady -= OnHistoryReady;
             ModData.SettingsChanged -= OnSettingsChanged;
+            ActiveScreenContext.Instance.Updated -= ScheduleVisibilityUpdate;
             if (_capstoneContainer != null)
                 _capstoneContainer.Changed -= OnCapstoneChanged;
             foreach (var window in _windows.Values)
@@ -879,12 +883,19 @@ namespace STS2RitsuMetrics.Ui
             var settings = ModData.Settings;
             var runManager = RunManager.Instance;
             var hasLiveCombat = Main.Repository.HasLiveCombat;
+            var isCombatScreenActive = ReferenceEquals(
+                ActiveScreenContext.Instance.GetCurrentScreen(),
+                NCombatRoom.Instance);
             var isRunCompletionView = runManager.IsInProgress &&
                                       (runManager.IsGameOver ||
                                        runManager.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true);
             var hasCompletedCombat = isRunCompletionView && Main.Repository.HasLiveRunCombat;
-            var showFloatingDashboards = settings.OverlayEnabled && runManager.IsInProgress &&
-                                         (hasLiveCombat || hasCompletedCombat);
+            var showFloatingDashboards = DashboardVisibility.ShouldShowFloatingDashboards(
+                settings.OverlayEnabled,
+                runManager.IsInProgress,
+                hasLiveCombat,
+                isCombatScreenActive,
+                hasCompletedCombat);
             var becameVisible = false;
             // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
             foreach (var window in _windows.Values)
