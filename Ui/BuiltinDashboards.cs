@@ -5,6 +5,7 @@ using Godot;
 using MegaCrit.Sts2.Core.Models;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
+using STS2RitsuMetrics.Data;
 using STS2RitsuMetrics.Localization;
 
 namespace STS2RitsuMetrics.Ui
@@ -2702,18 +2703,97 @@ namespace STS2RitsuMetrics.Ui
         private DashboardRenderContext? _lastContext;
         private string? _snapshotId;
 
+        private readonly DashboardDropdown _options = new() { IsActionMenu = true };
+        private bool? _collapseDetails;
+        private const string AutoScrollParameter = "timeline_auto_scroll";
+        internal bool IsFloatingWindow { get; set; }
+
+        internal TimelineRenderer()
+        {
+            _options.ApplyStyle(density: DashboardControlDensity.Compact);
+            DashboardIcons.ApplyIconOnly(_options, DashboardIcon.Configure, 17);
+            _options.CustomMinimumSize = new(34, _options.CustomMinimumSize.Y);
+            Toolbar.AddChild(_options);
+            _options.Opening += BuildOptionsMenu;
+            _options.ItemSelected += OnOptionSelected;
+        }
+
+        private void BuildOptionsMenu()
+        {
+            _options.Clear();
+            _options.AddLocalizedItem("timeline.view.expandAll", "Expand all");
+            _options.AddLocalizedItem("timeline.view.collapseAll", "Collapse all");
+            _options.AddLocalizedItem("timeline.view.defaultCollapsed", "Collapse new events");
+            if (ModData.Settings.TimelineCollapseDetails)
+                _options.CheckedItems.Add(2);
+            if (IsFloatingWindow)
+            {
+                _options.AddLocalizedItem("timeline.view.autoScroll", "Auto-scroll");
+                if (_lastContext?.Parameters.GetValueOrDefault(AutoScrollParameter) != "false")
+                    _options.CheckedItems.Add(3);
+                _options.AddLocalizedItem("timeline.view.latest", "Back to latest");
+            }
+            _options.Select(-1);
+        }
+
+        private void OnOptionSelected(long index)
+        {
+            switch (index)
+            {
+                case 0:
+                case 1:
+                    foreach (var eventId in _eventById.Keys)
+                    {
+                        _autoCollapseDecided.Add(eventId);
+                        if (index == 1 && TimelinePresentation.IsAction(_eventById[eventId].Kind))
+                            _collapsed.Add(eventId);
+                        else
+                            _collapsed.Remove(eventId);
+                    }
+                    RefreshOptions();
+                    break;
+                case 2:
+                    ModData.ModifySettings(settings =>
+                        settings.TimelineCollapseDetails = !settings.TimelineCollapseDetails);
+                    RefreshOptions();
+                    break;
+                case 3 when IsFloatingWindow:
+                    var enabled = _lastContext?.Parameters.GetValueOrDefault(AutoScrollParameter) == "false";
+                    _lastContext?.SetParameter(AutoScrollParameter, enabled ? "true" : "false");
+                    RefreshOptions();
+                    if (enabled)
+                        Scroll.ScrollToEndAfterLayout();
+                    break;
+                case 4 when IsFloatingWindow:
+                    Scroll.ScrollToEndAfterLayout();
+                    break;
+            }
+        }
+
+        private void RefreshOptions()
+        {
+            if (_lastContext != null)
+                Refresh(_lastContext);
+        }
+
         protected override bool CollapseSemanticMoves => true;
 
         protected override void Render(DashboardRenderContext context)
         {
             var snapshotId = context.Snapshot?.CombatId;
-            if (!string.Equals(snapshotId, _snapshotId, StringComparison.Ordinal))
+            var newCombat = !string.Equals(snapshotId, _snapshotId, StringComparison.Ordinal);
+            var autoScroll = context.Parameters.GetValueOrDefault(AutoScrollParameter) != "false";
+            Scroll.ConfigureAutoFollow(IsFloatingWindow && autoScroll, newCombat);
+            var collapseDetails = ModData.Settings.TimelineCollapseDetails;
+            if (newCombat)
             {
                 _snapshotId = snapshotId;
                 _collapsed.Clear();
                 _autoCollapseDecided.Clear();
             }
 
+            _collapseDetails = collapseDetails;
+            _options.TooltipText = ModLocalization.Get("timeline.view.options", "Timeline options");
             _lastContext = context;
             base.Render(context);
         }
@@ -2817,7 +2897,7 @@ namespace STS2RitsuMetrics.Ui
                 timelineEvent.Kind == CombatTimelineKind.DamageModifier);
             label.VerticalAlignment = VerticalAlignment.Center;
             row.AddChild(label);
-            if (_collapsed.Contains(timelineEvent.EventId))
+            if (hasChildren && _collapsed.Contains(timelineEvent.EventId))
             {
                 var hidden = Label($"+{descendantCount}", style, true, Math.Max(9, style.FontSize - 2));
                 hidden.CustomMinimumSize = new(40f, 0f);
@@ -2896,14 +2976,9 @@ namespace STS2RitsuMetrics.Ui
                 CountDescendants(timelineEvent.EventId, []);
             }
 
-            foreach (var timelineEvent in timelineEvents.Where(item => item.Kind == CombatTimelineKind.Damage &&
-                                                                       _childrenByParentId.TryGetValue(item.EventId,
-                                                                           out var children) &&
-                                                                       children.All(child =>
-                                                                           child.Kind == CombatTimelineKind
-                                                                               .DamageModifier)))
-                if (_autoCollapseDecided.Add(timelineEvent.EventId))
-                    _collapsed.Add(timelineEvent.EventId);
+            foreach (var timelineEvent in timelineEvents)
+                TimelinePresentation.ApplyInitialExpansion(timelineEvent.EventId, timelineEvent.Kind,
+                    _collapseDetails == true, _autoCollapseDecided, _collapsed);
         }
 
         private string[] ResolveAncestors(CombatTimelineEvent timelineEvent, HashSet<string> visiting)
@@ -2981,13 +3056,15 @@ namespace STS2RitsuMetrics.Ui
             ordered.Add(timelineEvent);
             if (!_childrenByParentId.TryGetValue(timelineEvent.EventId, out var children))
                 return;
-            foreach (var child in children.OrderBy(item =>
-                         EarliestSequence(item.EventId, earliestByEventId, [])).ThenBy(item => item.Sequence))
+            var orderedChildren = children.OrderBy(item =>
+                EarliestSequence(item.EventId, earliestByEventId, [])).ThenBy(item => item.Sequence);
+            foreach (var child in orderedChildren)
                 AppendBranch(child, ordered, emitted, earliestByEventId);
         }
 
         private void ToggleBranch(string eventId)
         {
+            Scroll.PauseAutoFollow();
             if (!_collapsed.Add(eventId))
                 _collapsed.Remove(eventId);
             if (_lastContext == null)

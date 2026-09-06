@@ -35,6 +35,7 @@ namespace STS2RitsuMetrics.Data.Models
         public int HistoryCombatLimit { get; set; } = 200;
         public int EventLimitPerCombat { get; set; } = 5000;
         public int TimelineLimitPerCombat { get; set; } = 20000;
+        public bool TimelineCollapseDetails { get; set; } = true;
         public string DefaultMetricId { get; set; } = MetricIds.DamageContribution;
 
         public List<DashboardWindowSettings> DashboardWindows { get; set; } =

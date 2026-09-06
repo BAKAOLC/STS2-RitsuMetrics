@@ -1,4 +1,10 @@
 {
+  "timeline.view.expandAll": "展开全部详情",
+  "timeline.view.collapseAll": "收起全部详情",
+  "timeline.view.defaultCollapsed": "新记录默认收起",
+  "timeline.view.autoScroll": "自动滚动",
+  "timeline.view.options": "时间线选项",
+  "timeline.view.latest": "回到最新",
   "mod.name": "律析",
   "dashboard.overview": "多维数据总览",
   "dashboard.overview.description": "玩家指标、进攻、防御、资源、归因与回合趋势",

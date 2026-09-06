@@ -636,6 +636,8 @@ namespace STS2RitsuMetrics.Ui
 
         private void BindRendererInteractions()
         {
+            if (_renderer is TimelineRenderer timeline)
+                timeline.IsFloatingWindow = true;
             if (_renderer is DashboardRendererBase builtInRenderer)
                 builtInRenderer.SetScopeToggle(ToggleScope);
         }

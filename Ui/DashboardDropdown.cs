@@ -70,6 +70,9 @@ namespace STS2RitsuMetrics.Ui
         public float PopupViewportFraction { get; set; } = 0.55f;
 
         public event Action<long>? ItemSelected;
+        internal event Action? Opening;
+        internal bool IsActionMenu { get; set; }
+        internal HashSet<int> CheckedItems { get; } = [];
 
         public override void _Ready()
         {
@@ -85,12 +88,12 @@ namespace STS2RitsuMetrics.Ui
             switch (input)
             {
                 case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mouse:
-                    HandlePointerPressed(mouse.Position);
-                    GetViewport().SetInputAsHandled();
+                    if (HandlePointerPressed(mouse.Position))
+                        GetViewport().SetInputAsHandled();
                     break;
                 case InputEventScreenTouch { Pressed: true } touch:
-                    HandlePointerPressed(touch.Position);
-                    GetViewport().SetInputAsHandled();
+                    if (HandlePointerPressed(touch.Position))
+                        GetViewport().SetInputAsHandled();
                     break;
                 case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape }:
                     HidePopup();
@@ -143,6 +146,7 @@ namespace STS2RitsuMetrics.Ui
             HidePopup();
             _items.Clear();
             _localizedItems.Clear();
+            CheckedItems.Clear();
             Selected = -1;
             Text = string.Empty;
             ClearRows();
@@ -177,6 +181,7 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
+            Opening?.Invoke();
             if (_items.Count == 0)
                 return;
             _popup.Theme = ResolveTypographyTheme() ?? DashboardControlTheme.CreateTypographyTheme();
@@ -208,7 +213,9 @@ namespace STS2RitsuMetrics.Ui
             _popup.Position = new(x, y);
             _popup.Size = size;
             _popupOverlay.Show();
-            if (Selected >= 0 && Selected < _rows.GetChildCount() && _rows.GetChild(Selected) is Control selectedRow)
+            var focusIndex = IsActionMenu ? 0 : Selected;
+            if (focusIndex >= 0 && focusIndex < _rows.GetChildCount() &&
+                _rows.GetChild(focusIndex) is Control selectedRow)
                 Callable.From(() => FocusSelectedRow(selectedRow)).CallDeferred();
         }
 
@@ -226,7 +233,10 @@ namespace STS2RitsuMetrics.Ui
                     SizeFlagsHorizontal = SizeFlags.ExpandFill,
                     FocusMode = FocusModeEnum.All,
                 };
-                DashboardControlTheme.ApplySelectionItem(button, index == Selected, _style);
+                DashboardControlTheme.ApplySelectionItem(button,
+                    IsActionMenu ? CheckedItems.Contains(index) : index == Selected, _style);
+                if (IsActionMenu && CheckedItems.Contains(index))
+                    button.Text = "✓ " + button.Text;
                 button.Pressed += () => SelectFromPopup(itemIndex);
                 _rows.AddChild(button);
             }
@@ -235,7 +245,8 @@ namespace STS2RitsuMetrics.Ui
         private void SelectFromPopup(int index)
         {
             HidePopup();
-            Select(index);
+            if (!IsActionMenu)
+                Select(index);
             ItemSelected?.Invoke(index);
         }
 
@@ -247,20 +258,27 @@ namespace STS2RitsuMetrics.Ui
             row.GrabFocus();
         }
 
-        private void HandlePointerPressed(Vector2 position)
+        private bool HandlePointerPressed(Vector2 position)
         {
             if (!_popup.GetGlobalRect().HasPoint(position))
             {
                 HidePopup();
-                return;
+                return true;
             }
+
+            var vertical = _scroll.GetVScrollBar();
+            var horizontal = _scroll.GetHScrollBar();
+            if ((vertical.IsVisibleInTree() && vertical.GetGlobalRect().HasPoint(position)) ||
+                (horizontal.IsVisibleInTree() && horizontal.GetGlobalRect().HasPoint(position)))
+                return false;
 
             for (var index = 0; index < _rows.GetChildCount(); index++)
                 if (_rows.GetChild(index) is Control row && row.GetGlobalRect().HasPoint(position))
                 {
                     SelectFromPopup(index);
-                    return;
+                    return true;
                 }
+            return true;
         }
 
         private void HidePopup()

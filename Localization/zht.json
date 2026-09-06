@@ -1,4 +1,10 @@
 {
+  "timeline.view.expandAll": "展開全部詳情",
+  "timeline.view.collapseAll": "收起全部詳情",
+  "timeline.view.defaultCollapsed": "新記錄預設收起",
+  "timeline.view.autoScroll": "自動捲動",
+  "timeline.view.options": "時間線選項",
+  "timeline.view.latest": "回到最新",
   "mod.name": "律析",
   "dashboard.overview": "多維資料總覽",
   "dashboard.overview.description": "玩家指標、進攻、防禦、資源、歸因與回合趨勢",

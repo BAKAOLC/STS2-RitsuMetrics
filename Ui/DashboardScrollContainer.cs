@@ -16,6 +16,69 @@ namespace STS2RitsuMetrics.Ui
         private bool _layoutRefreshPending;
         private int _layoutSettlePasses;
         private bool _visibleRangeNotificationPending;
+        private bool _scrollToEndPending;
+        private readonly ScrollFollowState _follow = new();
+        private double _lastEnd = -1d;
+        private int _stableEndFrames;
+
+        internal void ConfigureAutoFollow(bool enabled, bool reset)
+        {
+            _follow.Configure(enabled, reset);
+            SetProcess(enabled || _scrollToEndPending);
+        }
+
+        internal void PauseAutoFollow()
+        {
+            _follow.UserScrolled(false);
+            _scrollToEndPending = false;
+        }
+
+        internal bool IsAtEnd => _verticalScrollBar.MaxValue - _verticalScrollBar.Page - ScrollVertical <= 8d;
+
+        internal void ScrollToEndAfterLayout()
+        {
+            _scrollToEndPending = true;
+            _stableEndFrames = 0;
+            _follow.Resume();
+            SetProcess(true);
+            InvalidateContentSize();
+        }
+
+        public override void _Process(double delta)
+        {
+            if (!IsVisibleInTree() || (!_follow.Following && !_scrollToEndPending))
+                return;
+            var end = Math.Max(0d, _verticalScrollBar.MaxValue - _verticalScrollBar.Page);
+            ScrollVertical = (int)Math.Ceiling(end);
+            _stableEndFrames = Math.Abs(end - _lastEnd) < 0.5d && !_layoutRefreshPending
+                ? _stableEndFrames + 1
+                : 0;
+            _lastEnd = end;
+            if (_stableEndFrames < 2)
+                return;
+            _scrollToEndPending = false;
+            SetProcess(_follow.Enabled);
+        }
+
+        private void OnScrollInput(InputEvent input)
+        {
+            if (!_follow.Enabled && !_scrollToEndPending)
+                return;
+            if (input is InputEventMouseButton { ButtonIndex: MouseButton.Left } mouse)
+            {
+                PauseAutoFollow();
+                if (!mouse.Pressed)
+                    Callable.From(() => _follow.UserScrolled(IsAtEnd)).CallDeferred();
+            }
+            else if (input is InputEventMouseButton
+                     { Pressed: true, ButtonIndex: MouseButton.WheelUp or MouseButton.WheelDown } ||
+                     input is InputEventPanGesture ||
+                     input is InputEventKey { Pressed: true, Keycode: Key.Up or Key.Down or Key.Home or Key.End or Key.Pageup or Key.Pagedown })
+            {
+                PauseAutoFollow();
+                Callable.From(() => _follow.UserScrolled(IsAtEnd)).CallDeferred();
+            }
+        }
 
         public DashboardScrollContainer()
         {
@@ -33,6 +96,11 @@ namespace STS2RitsuMetrics.Ui
             _verticalScrollBar = GetVScrollBar();
             _verticalScrollBar.VisibilityChanged += UpdateContentGutter;
             _verticalScrollBar.ValueChanged += _ => ScheduleVisibleRangeChanged();
+            _verticalScrollBar.GuiInput += OnScrollInput;
+            GuiInput += OnScrollInput;
+            ScrollStarted += PauseAutoFollow;
+            ScrollEnded += () => _follow.UserScrolled(IsAtEnd);
+            SetProcess(false);
             Resized += OnResized;
             Callable.From(UpdateContentGutter).CallDeferred();
         }
@@ -135,7 +203,9 @@ namespace STS2RitsuMetrics.Ui
         private void ClampScrollAfterLayout()
         {
             var maximum = Math.Max(0d, _verticalScrollBar.MaxValue - _verticalScrollBar.Page);
-            ScrollVertical = Math.Min(ScrollVertical, (int)Math.Ceiling(maximum));
+            ScrollVertical = _scrollToEndPending || _follow.Following
+                ? (int)Math.Ceiling(maximum)
+                : Math.Min(ScrollVertical, (int)Math.Ceiling(maximum));
             UpdateContentGutter();
             ScheduleVisibleRangeChanged();
         }

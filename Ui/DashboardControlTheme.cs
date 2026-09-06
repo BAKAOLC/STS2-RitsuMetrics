@@ -245,9 +245,26 @@ namespace STS2RitsuMetrics.Ui
         {
             scrollBar.AddThemeStyleboxOverride("scroll", ScrollBox("101925D9", "27394EE0"));
             scrollBar.AddThemeStyleboxOverride("scroll_focus", ScrollBox("132033E8", "426181EF"));
-            scrollBar.AddThemeStyleboxOverride("grabber", ScrollBox("49647FD9", "6E8EACEF"));
-            scrollBar.AddThemeStyleboxOverride("grabber_highlight", ScrollBox("6689A8F2", "8CB6D7FF"));
-            scrollBar.AddThemeStyleboxOverride("grabber_pressed", ScrollBox("78A5C8FF", "A8D4F3FF"));
+            scrollBar.AddThemeStyleboxOverride("grabber", GrabberBox("49647FD9", "6E8EACEF", scrollBar));
+            scrollBar.AddThemeStyleboxOverride("grabber_highlight", GrabberBox("6689A8F2", "8CB6D7FF", scrollBar));
+            scrollBar.AddThemeStyleboxOverride("grabber_pressed", GrabberBox("78A5C8FF", "A8D4F3FF", scrollBar));
+        }
+
+        private static StyleBoxFlat GrabberBox(string background, string border, ScrollBar scrollBar)
+        {
+            var box = ScrollBox(background, border);
+            const float halfMinimumLength = 12f;
+            if (scrollBar is VScrollBar)
+            {
+                box.ContentMarginTop = halfMinimumLength;
+                box.ContentMarginBottom = halfMinimumLength;
+            }
+            else
+            {
+                box.ContentMarginLeft = halfMinimumLength;
+                box.ContentMarginRight = halfMinimumLength;
+            }
+            return box;
         }
 
         private static ButtonColors ColorsFor(DashboardButtonKind kind, DashboardStyleDefinition? style)

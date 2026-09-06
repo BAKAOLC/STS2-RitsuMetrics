@@ -1,4 +1,10 @@
 {
+  "timeline.view.expandAll": "Expand all details",
+  "timeline.view.collapseAll": "Collapse all details",
+  "timeline.view.defaultCollapsed": "Collapse new events",
+  "timeline.view.autoScroll": "Auto-scroll",
+  "timeline.view.options": "Timeline options",
+  "timeline.view.latest": "Back to latest",
   "mod.name": "RitsuMetrics",
   "dashboard.overview": "Multidimensional overview",
   "dashboard.overview.description": "Player KPIs, offense, defense, resources, attribution and turn trends",
