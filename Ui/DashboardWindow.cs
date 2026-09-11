@@ -105,6 +105,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Input(InputEvent input)
         {
+            if (OverviewMetricDialog.OpenDialogs > 0)
+                return;
             UpdateTouchInteraction(input);
             if (!_dragging && _resizeEdge == ResizeEdge.None)
                 return;

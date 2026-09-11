@@ -112,7 +112,14 @@ namespace STS2RitsuMetrics.Api
         string CharacterId,
         IReadOnlyDictionary<string, decimal> Totals,
         IReadOnlyDictionary<string, IReadOnlyList<SourceMetricSnapshot>> Sources,
-        string IdentityColor = "");
+        string IdentityColor = "")
+    {
+        /// <summary>
+        /// Metrics captured throughout this player's recorded combat. Null denotes legacy coverage;
+        /// only explicitly stored totals are known in that case. Empty means no complete metrics.
+        /// </summary>
+        public IReadOnlyList<string>? AvailableMetrics { get; init; }
+    }
 
     public sealed record CombatSnapshot(
         string RunId,

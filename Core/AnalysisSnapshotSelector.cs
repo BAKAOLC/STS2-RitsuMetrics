@@ -54,6 +54,7 @@ namespace STS2RitsuMetrics.Core
                 };
             return player with
             {
+                AvailableMetrics = MetricAvailability.Known(player).Where(SummaryMetricIds.Contains).ToArray(),
                 Totals = totals,
                 Sources = new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(StringComparer.Ordinal),
             };

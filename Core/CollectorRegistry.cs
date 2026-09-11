@@ -68,6 +68,11 @@ namespace STS2RitsuMetrics.Core
                     "defense"));
             Register(new(MetricIds.HealingReceived, "metric.healingReceived", "Healing received",
                 MetricValueKind.Amount, "defense"));
+            Register(new(MetricIds.BlockProvided, "metric.blockProvided", "Block provided", MetricValueKind.Amount, "contribution"));
+            Register(new(MetricIds.SelfBlockProvided, "metric.selfBlockProvided", "Self block provided", MetricValueKind.Amount, "defense"));
+            Register(new(MetricIds.AllyBlockProvided, "metric.allyBlockProvided", "Block given to allies", MetricValueKind.Amount, "contribution"));
+            Register(new(MetricIds.AllyDamageBlocked, "metric.allyDamageBlocked", "Ally damage blocked", MetricValueKind.Amount, "contribution"));
+            Register(new(MetricIds.AllyHealing, "metric.allyHealing", "Ally healing", MetricValueKind.Amount, "contribution"));
             Register(new(MetricIds.HealingContribution, "metric.healingContribution",
                 "Healing contribution",
                 MetricValueKind.Amount, "contribution"));

@@ -2,6 +2,7 @@
 
 using System.Collections.ObjectModel;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Core;
 
 namespace STS2RitsuMetrics.Domain
 {
@@ -323,6 +324,16 @@ namespace STS2RitsuMetrics.Domain
             }
         }
 
+        internal void InvalidateMetrics(params string[] metricIds)
+        {
+            lock (_gate)
+            {
+                foreach (var player in _players.Values)
+                    player.InvalidateMetrics(metricIds);
+                _metadataRevision++;
+            }
+        }
+
         public void AddTimeline(CombatTimelineEvent timelineEvent, int maxEvents)
         {
             lock (_gate)
@@ -476,6 +487,8 @@ namespace STS2RitsuMetrics.Domain
 
         private readonly Dictionary<string, decimal> _totals = new(StringComparer.Ordinal);
         private string _identityColor = identityColor;
+        private readonly HashSet<string> _availableMetrics = new(MetricAvailability.BuiltIns, StringComparer.Ordinal);
+        private bool _restored;
         private long _revision;
 
         public static MutablePlayerMetrics Restore(PlayerMetricSnapshot snapshot)
@@ -487,6 +500,9 @@ namespace STS2RitsuMetrics.Domain
                 snapshot.CharacterId,
                 snapshot.DisplayName,
                 snapshot.CharacterId), snapshot.IdentityColor);
+            metrics._restored = true;
+            metrics._availableMetrics.Clear();
+            metrics._availableMetrics.UnionWith(MetricAvailability.Known(snapshot));
             foreach (var (metricId, value) in snapshot.Totals)
                 metrics._totals[metricId] = value;
             foreach (var (metricId, sources) in snapshot.Sources)
@@ -512,6 +528,8 @@ namespace STS2RitsuMetrics.Domain
 
         public void Add(MetricObservation observation)
         {
+            if (!_restored && !observation.MetricId.StartsWith("core.", StringComparison.Ordinal))
+                _availableMetrics.Add(observation.MetricId);
             _totals[observation.MetricId] = _totals.GetValueOrDefault(observation.MetricId) + observation.Value;
             _revision++;
             _metricRevisions[observation.MetricId] = _revision;
@@ -533,6 +551,13 @@ namespace STS2RitsuMetrics.Domain
         public PlayerMetricSnapshot Snapshot()
         {
             return Snapshot(null);
+        }
+
+        internal void InvalidateMetrics(IEnumerable<string> metricIds)
+        {
+            foreach (var metricId in metricIds)
+                _availableMetrics.Remove(metricId);
+            _cachedSnapshots.Clear();
         }
 
         internal PlayerMetricSnapshot Snapshot(IReadOnlySet<string>? metricIds)
@@ -571,7 +596,11 @@ namespace STS2RitsuMetrics.Domain
                 player.CharacterId,
                 new ReadOnlyDictionary<string, decimal>(totals),
                 sources,
-                _identityColor);
+                _identityColor)
+            {
+                AvailableMetrics = Array.AsReadOnly(_availableMetrics
+                    .Where(id => metricIds == null || metricIds.Contains(id)).Order(StringComparer.Ordinal).ToArray()),
+            };
             if (_cachedSnapshots.Count >= 16)
                 _cachedSnapshots.Clear();
             _cachedSnapshots[selectionKey] = new(revision, snapshot);
@@ -654,7 +683,12 @@ namespace STS2RitsuMetrics.Domain
             foreach (var (metricId, values) in source.Sources)
                 sourceValues.Add(metricId, values.ToArray());
             var sources = new ReadOnlyDictionary<string, IReadOnlyList<SourceMetricSnapshot>>(sourceValues);
-            return source with { Totals = totals, Sources = sources };
+            return source with
+            {
+                Totals = totals,
+                Sources = sources,
+                AvailableMetrics = source.AvailableMetrics == null ? null : Array.AsReadOnly(source.AvailableMetrics.ToArray()),
+            };
         }
 
         private static MetricObservation Clone(MetricObservation source)

@@ -58,9 +58,11 @@ namespace STS2RitsuMetrics.Core
 
             private readonly Dictionary<string, decimal> _totals = new(StringComparer.Ordinal);
             private string _identityColor = first.IdentityColor;
+            private readonly HashSet<string> _availableMetrics = new(MetricAvailability.Known(first), StringComparer.Ordinal);
 
             internal void Add(PlayerMetricSnapshot player)
             {
+                _availableMetrics.IntersectWith(MetricAvailability.Known(player));
                 if (string.IsNullOrWhiteSpace(_identityColor) &&
                     !string.IsNullOrWhiteSpace(player.IdentityColor))
                     _identityColor = player.IdentityColor;
@@ -133,6 +135,7 @@ namespace STS2RitsuMetrics.Core
                     Totals = new Dictionary<string, decimal>(_totals, StringComparer.Ordinal),
                     Sources = sources,
                     IdentityColor = _identityColor,
+                    AvailableMetrics = _availableMetrics.Order(StringComparer.Ordinal).ToArray(),
                 };
             }
         }

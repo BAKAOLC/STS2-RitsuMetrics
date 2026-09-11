@@ -19,6 +19,11 @@ namespace STS2RitsuMetrics.Api
         public const string DamageAmplified = "core.damage.amplified";
         public const string DamageMitigated = "core.damage.mitigated";
         public const string BlockGained = "core.block.gained";
+        public const string BlockProvided = "core.block.provided";
+        public const string SelfBlockProvided = "core.block.provided.self";
+        public const string AllyBlockProvided = "core.block.provided.ally";
+        public const string AllyDamageBlocked = "core.block.prevented.ally";
+        public const string AllyHealing = "core.healing.ally";
         public const string HealingReceived = "core.healing.received";
         public const string HealingContribution = "core.healing.contribution";
         public const string CardsPlayed = "core.card.played";

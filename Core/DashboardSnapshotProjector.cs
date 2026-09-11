@@ -33,6 +33,7 @@ namespace STS2RitsuMetrics.Core
         {
             return player with
             {
+                AvailableMetrics = MetricAvailability.Known(player).Where(metricIds.Contains).ToArray(),
                 Totals = player.Totals
                     .Where(item => metricIds.Contains(item.Key))
                     .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),

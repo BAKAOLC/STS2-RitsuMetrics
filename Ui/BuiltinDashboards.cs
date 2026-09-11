@@ -1628,6 +1628,21 @@ namespace STS2RitsuMetrics.Ui
                 return;
             }
 
+            if (snapshot.Players.Any(player => MetricAvailability.Value(player, metricId) == null))
+            {
+                Subtitle = ModLocalization.Get("overview.unavailable", "N/A: not captured, incomplete attribution, or an undefined ratio.");
+                CompactSubtitle = "N/A";
+                ReconcileRows(snapshot.Players.Select(player =>
+                {
+                    var value = MetricAvailability.Value(player, metricId);
+                    var text = $"{player.DisplayName}  ·  {(value is { } amount ? Format(amount) : "N/A")}";
+                    return new ReconciledRow(player.PlayerKey, text + VisualStyleFingerprint(context.Style),
+                        () => WrappedLabel(text, context.Style, value == null));
+                }));
+                Status.Text = snapshot.EncounterName;
+                return;
+            }
+
             var values = BuildMeterEntries(snapshot, metricId, DashboardPresentation.SplitSummons(context.Parameters));
             var playerAccents = _playerColorCache.Resolve(
                 values.Select(entry => new PlayerColorIdentity(

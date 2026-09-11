@@ -131,6 +131,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _UnhandledInput(InputEvent @event)
         {
+            if (OverviewMetricDialog.OpenDialogs > 0)
+                return;
             if (@event is not InputEventKey { Pressed: true, Echo: false } key)
                 return;
             if (key.Keycode == Key.Escape && _analysisCenter is { Visible: true } analysisCenter)
@@ -152,6 +154,8 @@ namespace STS2RitsuMetrics.Ui
 
         public override void _Input(InputEvent @event)
         {
+            if (OverviewMetricDialog.OpenDialogs > 0)
+                return;
             if (@event is not InputEventMouseButton
                 {
                     ButtonIndex: MouseButton.Left, Pressed: true,

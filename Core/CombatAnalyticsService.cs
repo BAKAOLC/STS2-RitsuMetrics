@@ -726,6 +726,7 @@ namespace STS2RitsuMetrics.Core
             catch (Exception exception)
             {
                 _historyProcessingFailures++;
+                combat.InvalidateMetrics(MetricAvailability.BuiltIns);
                 if (_historyProcessingFailures == 1)
                     Main.Logger.Error(
                         $"Failed to process a combat history entry; further failures in this combat are suppressed: {exception}");
@@ -1224,7 +1225,7 @@ namespace STS2RitsuMetrics.Core
             var receiver = GameDescriptorFactory.Creature(block.Receiver);
             var cardProvider = block.CardPlay is { } cardPlay
                 ? GameDescriptorFactory.Player(cardPlay.Card.Owner)
-                : null;
+                : cause?.Model is PowerModel ? null : GameDescriptorFactory.ModelOwner(cause?.Model);
             var shares = ResolveAttributionShares(block.Receiver, cause?.Model, ValueProp.Unpowered, block.Amount,
                 cardProvider, source);
             var receivingPlayer = GameDescriptorFactory.Player(block.Receiver);
@@ -1235,6 +1236,20 @@ namespace STS2RitsuMetrics.Core
                 ];
             if (shares.Length > 0)
             {
+                if (receiver.Kind == AnalyticsEntityKind.Player)
+                {
+                    if (shares.Any(share => share.Confidence == AttributionConfidence.Heuristic))
+                        _activeCombat?.InvalidateMetrics(MetricIds.BlockProvided, MetricIds.SelfBlockProvided,
+                            MetricIds.AllyBlockProvided);
+                    foreach (var share in shares)
+                    {
+                        var tags = ContributionTags(null, ContributionComponentIds.Block, share.Confidence);
+                        Record(share.Contributor, MetricIds.BlockProvided, share.EffectiveContribution,
+                            share.Source, receiver, tags);
+                        Record(share.Contributor, SupportMetrics.BlockMetric(share.Contributor, receiver),
+                            share.EffectiveContribution, share.Source, receiver, tags);
+                    }
+                }
                 if (!_blockCredits.TryGetValue(block.Receiver, out var credits))
                 {
                     credits = new();
@@ -1271,6 +1286,14 @@ namespace STS2RitsuMetrics.Core
             foreach (var share in credits.Consume(blocked))
             {
                 var contributionTags = ContributionTags(tags, ContributionComponentIds.Block, share.Confidence);
+                if (GameDescriptorFactory.Creature(receiver).Kind == AnalyticsEntityKind.Player)
+                {
+                    if (share.Confidence == AttributionConfidence.Heuristic)
+                        _activeCombat?.InvalidateMetrics(MetricIds.AllyDamageBlocked);
+                    if (SupportMetrics.IsAlly(share.Contributor, receivingPlayer))
+                        Record(share.Contributor, MetricIds.AllyDamageBlocked, share.EffectiveContribution,
+                            share.Source, receivingPlayer, contributionTags);
+                }
                 Record(share.Contributor, MetricIds.DamagePrevented, share.EffectiveContribution, share.Source,
                     attacker, contributionTags);
                 Record(share.Contributor, MetricIds.DefenseContribution, share.EffectiveContribution, share.Source,
@@ -1435,6 +1458,14 @@ namespace STS2RitsuMetrics.Core
                     var contributionTags = ContributionTags(null, ContributionComponentIds.Healing,
                         share.Confidence);
                     var healingTarget = GameDescriptorFactory.Creature(evt.Creature);
+                    if (healingTarget.Kind == AnalyticsEntityKind.Player)
+                    {
+                        if (share.Confidence == AttributionConfidence.Heuristic)
+                            _activeCombat?.InvalidateMetrics(MetricIds.AllyHealing);
+                        if (SupportMetrics.IsAlly(share.Contributor, healingTarget))
+                            Record(share.Contributor, MetricIds.AllyHealing, share.EffectiveContribution,
+                                share.Source, healingTarget, contributionTags);
+                    }
                     Record(share.Contributor, MetricIds.HealingContribution, share.EffectiveContribution,
                         share.Source, healingTarget, contributionTags);
                     Record(share.Contributor, MetricIds.DefenseContribution, share.EffectiveContribution,
