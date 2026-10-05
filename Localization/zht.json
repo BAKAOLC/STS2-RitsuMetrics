@@ -1,4 +1,7 @@
 {
+  "settings.attributeTriggeredEffects": "連攜顯示",
+  "attribution.linked": "連攜",
+  "attribution.direct": "普通",
   "overview.configure": "顯示指標",
   "overview.configureHint": "選擇 1–16 項指標，用箭頭調整順序；儲存後套用至所有資料總覽。",
   "overview.preset.default": "均衡預設",
@@ -74,7 +77,6 @@
   "overview.keyMetrics.meta": "傷害 · 生存 · 行動 · 支援",
   "overview.teamTotal": "團隊合計",
   "overview.combatFlow": "戰鬥走勢",
-  "overview.combatFlow.meta": "同口徑 AD / RD 來源與攻防回合趨勢",
   "overview.turnTrend.section": "{0}回合趨勢",
   "overview.combatTrend.section": "逐場戰鬥{0}",
   "overview.combatAnalysis": "戰鬥分析",

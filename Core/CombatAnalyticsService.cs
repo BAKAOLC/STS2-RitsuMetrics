@@ -84,6 +84,7 @@ namespace STS2RitsuMetrics.Core
             CaptureBridge.FallbackParentResolver = null;
             CaptureBridge.EffectMaterialized = null;
             CaptureBridge.DamageRequestCompleted = null;
+            CaptureBridge.CombatRoomStarting = null;
             ModData.HistoryReady -= OnHistoryReady;
         }
 
@@ -94,6 +95,8 @@ namespace STS2RitsuMetrics.Core
             CaptureBridge.FallbackParentResolver = () => _activeTurnEventId;
             CaptureBridge.EffectMaterialized = OnEffectMaterialized;
             CaptureBridge.DamageRequestCompleted = OnDamageRequestCompleted;
+            CaptureBridge.CombatRoomStarting = (runState, room) =>
+                StartCombat(new(runState, room.CombatState, DateTimeOffset.UtcNow));
 
             Subscribe<ProfileDataReadyEvent>(_ => MetricsRepository.ReconcileLegacyMultiplayerRuns());
             Subscribe<RunStartedEvent>(OnRunStarted);
@@ -314,6 +317,8 @@ namespace STS2RitsuMetrics.Core
 
         private void StartCombat(CombatStartingEvent evt)
         {
+            if (_captureActive && ReferenceEquals(_currentState, evt.CombatState))
+                return;
             var run = _liveRun ?? repository.LiveRun;
             if (run == null)
             {
@@ -849,9 +854,15 @@ namespace STS2RitsuMetrics.Core
             var contributions = BuildContributions(calculation, source, requested, modified, blocked, damageDealt,
                 overkill);
             var attributionShares = ResolveAttributionShares(damageReceiver, attributionModel, props,
-                damageDealt, directDealer, source);
+                damageDealt, directDealer, source, true);
+            if (damageCardSource == null)
+            {
+                var triggeredShares = ResolveEffectProviders(cause, source, damageDealt);
+                if (triggeredShares.Length > 0)
+                    attributionShares = triggeredShares;
+            }
             var effectiveHpShares = ScaleShares(attributionShares, hpLost);
-            if (directDealer == null && attributionShares.Length > 0)
+            if (directDealer == null && attributionShares.Length > 0 && source.Kind == AnalyticsSourceKind.Unknown)
                 source = attributionShares[0].Source;
             var breakdown = new DamageBreakdown(requested, modified, blocked, hpLost, overkill, damageDealt,
                 props.ToString(), contributions, attributionShares);
@@ -871,12 +882,12 @@ namespace STS2RitsuMetrics.Core
                              .Where(share => share.EffectiveContribution > 0m))
                     Record(share.Contributor, MetricIds.DamageDealt, share.EffectiveContribution, share.Source,
                         receiver,
-                        tags);
+                        AttributionDisplay.Tags(tags, source, source));
                 foreach (var share in AggregateShares(effectiveHpShares)
                              .Where(share => share.EffectiveContribution > 0m))
                     Record(share.Contributor, MetricIds.EffectiveHpDamageDealt, share.EffectiveContribution,
                         share.Source,
-                        receiver, tags);
+                        receiver, AttributionDisplay.Tags(tags, source, source));
                 RecordOffensiveContributions(damageReceiver, calculation, contributions, attributionShares, damageDealt,
                     receiver, tags, MetricIds.DamageContribution);
                 RecordOffensiveContributions(damageReceiver, calculation, contributions, effectiveHpShares, hpLost,
@@ -1028,7 +1039,10 @@ namespace STS2RitsuMetrics.Core
                 foreach (var share in AggregateShares(shares))
                     Record(share.Contributor, metricId, share.EffectiveContribution,
                         share.Source, target,
-                        ContributionTags(tags, component, share.Confidence));
+                        AttributionDisplay.Tags(ContributionTags(tags, component, share.Confidence),
+                            contribution.Source, contribution.Source,
+                            component == ContributionComponentIds.DamageAmplification
+                                ? contributions[0].Source.DisplayName : null));
             }
         }
 
@@ -1189,9 +1203,13 @@ namespace STS2RitsuMetrics.Core
                 return;
             var shares = ResolveAttributionShares(receiver, model, calculation.Props, attributedAmount,
                 model is PowerModel ? null : owner?.Kind == AnalyticsEntityKind.Player ? owner : null,
-                contribution.Source);
+                contribution.Source, true);
             foreach (var share in AggregateShares(shares))
-                Record(share.Contributor, metricId, share.EffectiveContribution, contribution.Source, target, tags);
+            {
+                Record(share.Contributor, metricId, share.EffectiveContribution, share.Source, target,
+                    AttributionDisplay.Tags(tags, contribution.Source, contribution.Source,
+                        calculation.Cause?.Source?.DisplayName));
+            }
             if (isAmplification)
                 return;
             var receivingPlayer = GameDescriptorFactory.Player(receiver);
@@ -1205,12 +1223,12 @@ namespace STS2RitsuMetrics.Core
                 ];
             foreach (var share in AggregateShares(shares))
             {
-                var contributionTags = ContributionTags(tags, ContributionComponentIds.DamageMitigation,
-                    share.Confidence);
+                var contributionTags = AttributionDisplay.Tags(ContributionTags(tags, ContributionComponentIds.DamageMitigation,
+                    share.Confidence), contribution.Source, contribution.Source);
                 Record(share.Contributor, MetricIds.DamagePrevented, share.EffectiveContribution,
-                    contribution.Source, target, contributionTags);
+                    share.Source, target, contributionTags);
                 Record(share.Contributor, MetricIds.DefenseContribution, share.EffectiveContribution,
-                    contribution.Source, target, contributionTags);
+                    share.Source, target, contributionTags);
             }
         }
 
@@ -1220,14 +1238,25 @@ namespace STS2RitsuMetrics.Core
             var source = block.CardPlay == null
                 ? cause?.Source ?? GameDescriptorFactory.Unknown()
                 : GameDescriptorFactory.Card(block.CardPlay.Card);
-            RecordForCreature(block.Receiver, MetricIds.BlockGained, block.Amount, source, null,
-                Tags(("value_props", block.Props.ToString())));
             var receiver = GameDescriptorFactory.Creature(block.Receiver);
             var cardProvider = block.CardPlay is { } cardPlay
                 ? GameDescriptorFactory.Player(cardPlay.Card.Owner)
                 : cause?.Model is PowerModel ? null : GameDescriptorFactory.ModelOwner(cause?.Model);
             var shares = ResolveAttributionShares(block.Receiver, cause?.Model, ValueProp.Unpowered, block.Amount,
-                cardProvider, source);
+                cardProvider, source, true);
+            if (block.CardPlay == null)
+            {
+                var triggeredShares = ResolveEffectProviders(cause, source, block.Amount);
+                if (triggeredShares.Length > 0)
+                    shares = triggeredShares;
+            }
+            if (shares.Length == 0)
+                RecordForCreature(block.Receiver, MetricIds.BlockGained, block.Amount, source, null,
+                    Tags(("value_props", block.Props.ToString())));
+            else
+                foreach (var share in AggregateShares(shares))
+                    RecordForCreature(block.Receiver, MetricIds.BlockGained, share.EffectiveContribution,
+                        share.Source, null, AttributionDisplay.Tags(Tags(("value_props", block.Props.ToString())), source, source));
             var receivingPlayer = GameDescriptorFactory.Player(block.Receiver);
             if (shares.Length == 0 && receivingPlayer != null)
                 shares =
@@ -1243,7 +1272,7 @@ namespace STS2RitsuMetrics.Core
                             MetricIds.AllyBlockProvided);
                     foreach (var share in shares)
                     {
-                        var tags = ContributionTags(null, ContributionComponentIds.Block, share.Confidence);
+                        var tags = AttributionDisplay.Tags(ContributionTags(null, ContributionComponentIds.Block, share.Confidence), source, source);
                         Record(share.Contributor, MetricIds.BlockProvided, share.EffectiveContribution,
                             share.Source, receiver, tags);
                         Record(share.Contributor, SupportMetrics.BlockMetric(share.Contributor, receiver),
@@ -1260,7 +1289,7 @@ namespace STS2RitsuMetrics.Core
                     GameDescriptorFactory.Player(block.Receiver), GameDescriptorFactory.Unknown());
                 foreach (var share in shares)
                     credits.Add(share.Contributor, share.Source, share.EffectiveContribution, share.Confidence,
-                        share.OriginEventId ?? cause?.EventId);
+                        share.OriginEventId ?? cause?.EventId, source);
             }
 
             AddTimeline(CombatTimelineKind.Block, TimelineEventPhase.Instant, "block.gain", source.DisplayName,
@@ -1268,6 +1297,42 @@ namespace STS2RitsuMetrics.Core
                 source, block.Amount,
                 Details(("value_props", block.Props.ToString())));
         }
+
+        private DamageAttributionShare[] ResolveEffectProviders(CausalScopeSnapshot? cause,
+            SourceDescriptor effect, decimal amount)
+        {
+            return SelectEffectProviders(cause, effect, amount, ancestor =>
+            {
+                if (ancestor.Model is PowerModel power && _powerCredits.TryGetValue(power, out var credits))
+                {
+                    var shares = credits.Shares(amount, AttributionConfidence.Derived, true);
+                    if (shares.Length > 0)
+                        return shares;
+                }
+                var owner = GameDescriptorFactory.ModelOwner(ancestor.Model);
+                return owner?.Kind == AnalyticsEntityKind.Player
+                    ? [new(owner, ancestor.Source, 1m, amount, AttributionConfidence.Exact, ancestor.EventId)]
+                    : [];
+            });
+        }
+
+        internal static DamageAttributionShare[] SelectEffectProviders(CausalScopeSnapshot? cause,
+            SourceDescriptor effect, decimal amount, Func<CausalAncestor, DamageAttributionShare[]> resolve)
+        {
+            if (cause == null || amount <= 0m)
+                return [];
+            foreach (var ancestor in cause.Ancestors)
+            {
+                if (ancestor.Source.Key == effect.Key || ancestor.Source.Kind is not
+                    (AnalyticsSourceKind.Card or AnalyticsSourceKind.Relic or AnalyticsSourceKind.Power or AnalyticsSourceKind.Potion))
+                    continue;
+                var shares = resolve(ancestor);
+                if (shares.Length > 0)
+                    return shares;
+            }
+            return [];
+        }
+
 
         private void RecordBlockedContribution(
             Creature receiver,
@@ -1285,7 +1350,9 @@ namespace STS2RitsuMetrics.Core
             credits.Synchronize(receiver.Block + blocked, receivingPlayer, GameDescriptorFactory.Unknown());
             foreach (var share in credits.Consume(blocked))
             {
-                var contributionTags = ContributionTags(tags, ContributionComponentIds.Block, share.Confidence);
+                var contributionTags = AttributionDisplay.Tags(
+                    ContributionTags(tags, ContributionComponentIds.Block, share.Confidence),
+                    share.EffectSource ?? share.Source, share.EffectSource ?? share.Source);
                 if (GameDescriptorFactory.Creature(receiver).Kind == AnalyticsEntityKind.Player)
                 {
                     if (share.Confidence == AttributionConfidence.Heuristic)
@@ -1314,11 +1381,22 @@ namespace STS2RitsuMetrics.Core
             var cause = CausalScopeRuntime.Snapshot();
             var causalActor = GameDescriptorFactory.ModelOwner(cause?.OriginModel) ??
                               GameDescriptorFactory.ModelOwner(cause?.Model);
-            var causalSource = cause?.OriginSource ?? cause?.Source;
+            var causalSource = cause?.Source ?? cause?.OriginSource;
+            player ??= causalActor?.Kind == AnalyticsEntityKind.Player ? causalActor : null;
             switch (entry.Amount)
             {
                 case > 0m when player != null:
-                    attribution.Add(player, entry.Amount, cause?.EventId);
+                    var providers = cause?.Model is PowerModel provider &&
+                                    !ReferenceEquals(provider, entry.Power) &&
+                                    _powerCredits.TryGetValue(provider, out var providerCredits)
+                        ? providerCredits.Shares(entry.Amount, AttributionConfidence.Derived, true)
+                        : [];
+                    if (providers.Length == 0)
+                        attribution.Add(player, entry.Amount, cause?.EventId, causalSource);
+                    else
+                        foreach (var credit in providers)
+                            attribution.Add(credit.Contributor, credit.EffectiveContribution,
+                                credit.OriginEventId, credit.Source);
                     break;
                 case < 0m:
                     attribution.Remove(-entry.Amount);
@@ -1350,12 +1428,13 @@ namespace STS2RitsuMetrics.Core
             ValueProp props,
             decimal effectiveAmount,
             EntityDescriptor? directPlayer,
-            SourceDescriptor source)
+            SourceDescriptor source,
+            bool useOriginSource = false)
         {
             if (effectiveAmount <= 0m)
                 return [];
             var trackedPowerShares = model is PowerModel power && _powerCredits.TryGetValue(power, out var exact)
-                ? exact.Shares(effectiveAmount, AttributionConfidence.Exact)
+                ? exact.Shares(effectiveAmount, AttributionConfidence.Derived, useOriginSource)
                 : [];
             var primaryShares = ResolvePrimaryAttributionShares(
                 trackedPowerShares,
@@ -1404,7 +1483,7 @@ namespace STS2RitsuMetrics.Core
             var owner = GameDescriptorFactory.ModelOwner(model);
             return ResolveAttributionShares(receiver, model, calculation.Props, effectiveAmount,
                 model is PowerModel ? null : owner?.Kind == AnalyticsEntityKind.Player ? owner : null,
-                contribution.Source);
+                contribution.Source, true);
         }
 
         private static DamageAttributionShare[] ScaleShares(
@@ -1696,6 +1775,8 @@ namespace STS2RitsuMetrics.Core
             var combat = _activeCombat;
             if (run == null || combat == null || value <= 0m || !collectors.IsRegisteredMetric(metricId))
                 return;
+            if (AttributionDisplay.Supports(metricId) && tags?.ContainsKey("view.direct.key") != true)
+                tags = AttributionDisplay.Tags(tags ?? MetricObservation.EmptyTags, source, source);
             Record(new(
                 Interlocked.Increment(ref _metricSequence),
                 run.RunId,
@@ -2130,7 +2211,8 @@ namespace STS2RitsuMetrics.Core
             SourceDescriptor Source,
             decimal Amount,
             AttributionConfidence Confidence,
-            string? OriginEventId);
+            string? OriginEventId,
+            SourceDescriptor? EffectSource);
 
         private sealed class BlockAttribution
         {
@@ -2141,7 +2223,8 @@ namespace STS2RitsuMetrics.Core
                 SourceDescriptor source,
                 decimal amount,
                 AttributionConfidence confidence,
-                string? originEventId)
+                string? originEventId,
+                SourceDescriptor? effectSource = null)
             {
                 if (amount <= 0m)
                     return;
@@ -2149,7 +2232,7 @@ namespace STS2RitsuMetrics.Core
                 var previous = _credits.GetValueOrDefault(key);
                 _credits[key] = new(player, source, (previous?.Amount ?? 0m) + amount,
                     MoreApproximate(previous?.Confidence ?? confidence, confidence),
-                    originEventId ?? previous?.OriginEventId);
+                    originEventId ?? previous?.OriginEventId, effectSource ?? source);
             }
 
             internal void Synchronize(
@@ -2181,7 +2264,7 @@ namespace STS2RitsuMetrics.Core
                     credit.Amount / total,
                     consumed * credit.Amount / total,
                     credit.Confidence,
-                    credit.OriginEventId)).ToArray();
+                    credit.OriginEventId) { EffectSource = credit.EffectSource }).ToArray();
                 Scale(Math.Max(0m, total - consumed) / total);
                 return result;
             }
@@ -2207,17 +2290,18 @@ namespace STS2RitsuMetrics.Core
             }
         }
 
-        private sealed class PowerAttribution(SourceDescriptor source)
+        internal sealed class PowerAttribution(SourceDescriptor source)
         {
             private readonly Dictionary<string, PowerCredit> _credits = new(StringComparer.Ordinal);
 
-            internal void Add(EntityDescriptor player, decimal amount, string? originEventId)
+            internal void Add(EntityDescriptor player, decimal amount, string? originEventId,
+                SourceDescriptor? originSource = null)
             {
                 if (amount <= 0m)
                     return;
-                var key = $"{player.Key}\u001f{originEventId ?? "unknown"}";
+                var key = $"{player.Key}\u001f{(originSource ?? source).Key}\u001f{originEventId ?? "unknown"}";
                 var previous = _credits.GetValueOrDefault(key);
-                _credits[key] = new(player, source, (previous?.Weight ?? 0m) + amount,
+                _credits[key] = new(player, originSource ?? source, (previous?.Weight ?? 0m) + amount,
                     originEventId ?? previous?.OriginEventId);
             }
 
@@ -2240,7 +2324,8 @@ namespace STS2RitsuMetrics.Core
 
             internal DamageAttributionShare[] Shares(
                 decimal effectiveAmount,
-                AttributionConfidence confidence)
+                AttributionConfidence confidence,
+                bool useOriginSource = false)
             {
                 var total = _credits.Values.Sum(credit => credit.Weight);
                 if (total <= 0m || effectiveAmount <= 0m)
@@ -2249,7 +2334,7 @@ namespace STS2RitsuMetrics.Core
                     .OrderByDescending(credit => credit.Weight)
                     .Select(credit => new DamageAttributionShare(
                         credit.Player,
-                        credit.Source,
+                        useOriginSource ? credit.Source : source,
                         credit.Weight / total,
                         effectiveAmount * credit.Weight / total,
                         confidence,

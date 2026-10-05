@@ -138,7 +138,10 @@ namespace STS2RitsuMetrics.Api
         decimal Weight,
         decimal EffectiveContribution,
         AttributionConfidence Confidence,
-        string? OriginEventId = null);
+        string? OriginEventId = null)
+    {
+        public SourceDescriptor? EffectSource { get; init; }
+    }
 
     public sealed record DamageBreakdown(
         decimal RequestedAmount,

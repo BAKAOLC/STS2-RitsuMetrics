@@ -6,6 +6,8 @@ using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Rooms;
+using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib;
 using STS2RitsuLib.Patching.Builders;
 using STS2RitsuLib.Patching.Core;
@@ -50,6 +52,12 @@ namespace STS2RitsuMetrics.Capture
                 return;
 
             var builder = new DynamicPatchBuilder("timeline_capture");
+            builder.Add(
+                AccessTools.Method(typeof(Hook), nameof(Hook.AfterRoomEntered),
+                    [typeof(IRunState), typeof(AbstractRoom)]),
+                CapturePatchMethod(nameof(CombatRoomPrefix), Priority.First),
+                isCritical: true,
+                description: "Start attribution before room-entry relic effects");
             AddDamageRequestPatch(builder);
             AddDamageCalculationPatch(builder);
             AddHpLossCalculationPatch(builder);
@@ -113,6 +121,12 @@ namespace STS2RitsuMetrics.Capture
                 finalizer: CapturePatchMethod(nameof(DamageRequestFinalizer), Priority.Last),
                 isCritical: true,
                 description: "Capture the causal scope of actual damage requests");
+        }
+
+        private static void CombatRoomPrefix(IRunState __0, AbstractRoom __1)
+        {
+            if (!CaptureBridge.IsSpeculative && __1 is CombatRoom room)
+                CaptureBridge.CombatRoomStarting?.Invoke(__0, room);
         }
 
         private static void AddDamageCalculationPatch(DynamicPatchBuilder builder)

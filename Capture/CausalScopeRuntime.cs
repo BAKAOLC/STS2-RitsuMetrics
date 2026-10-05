@@ -2,6 +2,8 @@
 
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Rooms;
+using MegaCrit.Sts2.Core.Runs;
 using STS2RitsuLib.Utils.Speculation;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
@@ -24,7 +26,12 @@ namespace STS2RitsuMetrics.Capture
         string ActionId,
         string OriginEventId,
         AbstractModel? OriginModel,
-        SourceDescriptor? OriginSource);
+        SourceDescriptor? OriginSource)
+    {
+        internal IReadOnlyList<CausalAncestor> Ancestors { get; init; } = [];
+    }
+
+    internal sealed record CausalAncestor(AbstractModel? Model, SourceDescriptor Source, string EventId);
 
     internal static class CaptureBridge
     {
@@ -32,6 +39,7 @@ namespace STS2RitsuMetrics.Capture
         internal static Action<DamageRequestCapture, IReadOnlyList<DamageResult>>? DamageRequestCompleted { get; set; }
         internal static Func<string?>? FallbackParentResolver { get; set; }
         internal static Func<bool>? IsCombatActive { get; set; }
+        internal static Action<IRunState, CombatRoom>? CombatRoomStarting { get; set; }
 
         internal static bool IsSpeculative => SpeculativeExecutionSession.Current != null;
 
@@ -118,10 +126,14 @@ namespace STS2RitsuMetrics.Capture
                 return null;
             Materialize(frame, fallback);
             var origin = frame;
+            var ancestors = new List<CausalAncestor>();
+            for (var parentFrame = frame.Parent; parentFrame != null; parentFrame = parentFrame.Parent)
+                if (parentFrame.Source != null)
+                    ancestors.Add(new(parentFrame.Model, parentFrame.Source, parentFrame.EventId));
             while (origin.Parent is { Model: not null, Source: not null } parent)
                 origin = parent;
             return new(frame.EventId, ParentId(frame, fallback), frame.Model, frame.Source,
-                frame.ActionId, origin.EventId, origin.Model, origin.Source);
+                frame.ActionId, origin.EventId, origin.Model, origin.Source) { Ancestors = ancestors };
         }
 
         private static void Materialize(ScopeFrame frame, string? fallback)

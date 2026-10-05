@@ -29,6 +29,7 @@ namespace STS2RitsuMetrics.Ui
             .Select(value => value.ToString(CultureInfo.InvariantCulture)).ToArray();
 
         private readonly Button _fullOpacityOnHover;
+        private readonly Button _linkedAttribution;
 
         private readonly DashboardDropdown _layout;
 
@@ -147,6 +148,10 @@ namespace STS2RitsuMetrics.Ui
                 UpdateFullOpacityOnHoverText(enabled);
                 PreviewOpacity();
             };
+            _linkedAttribution = AddToggleFieldCell(fields,
+                ModLocalization.Get("settings.attributeTriggeredEffects", "Synergy display"), out _);
+            _linkedAttribution.Toggled += enabled => _linkedAttribution.Text = ModLocalization.Get(
+                enabled ? "attribution.linked" : "attribution.direct", enabled ? "Synergy" : "Direct");
 
             var actions = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.End };
             actions.AddThemeConstantOverride("separation", 10);
@@ -228,6 +233,8 @@ namespace STS2RitsuMetrics.Ui
             _windowOpacity.SetValue(ModData.Settings.WindowOpacityPercent);
             _backgroundOpacity.SetValue(ModData.Settings.OpacityPercent);
             SetFullOpacityOnHover(true);
+            _linkedAttribution.ButtonPressed = ModData.Settings.AttributeTriggeredEffects;
+            _linkedAttribution.Text = ModLocalization.Get(_linkedAttribution.ButtonPressed ? "attribution.linked" : "attribution.direct", "Direct");
             _title.Text = ModLocalization.Get("dashboard.createTitle", "New floating dashboard");
             _submit.Text = ModLocalization.Get("dashboard.createConfirm", "Create dashboard");
             UpdateSelectedDashboard();
@@ -262,6 +269,9 @@ namespace STS2RitsuMetrics.Ui
             _backgroundOpacity.SetValue(Percentage(info.Parameters, DashboardParameterIds.BackgroundOpacity,
                 ModData.Settings.OpacityPercent));
             SetFullOpacityOnHover(DashboardPresentation.FullOpacityOnHover(info.Parameters));
+            _linkedAttribution.ButtonPressed = info.Parameters.GetValueOrDefault(AttributionDisplay.ModeParameter,
+                ModData.Settings.AttributeTriggeredEffects ? "true" : "false") == "true";
+            _linkedAttribution.Text = ModLocalization.Get(_linkedAttribution.ButtonPressed ? "attribution.linked" : "attribution.direct", "Direct");
             _title.Text = ModLocalization.Get("dashboard.editTitle", "Configure dashboard");
             _submit.Text = ModLocalization.Get("dashboard.applyChanges", "Apply changes");
             UpdateSelectedDashboard();
@@ -315,6 +325,7 @@ namespace STS2RitsuMetrics.Ui
                 [DashboardParameterIds.BackgroundOpacity] =
                     _backgroundOpacity.Value.ToString(CultureInfo.InvariantCulture),
                 [DashboardParameterIds.FullOpacityOnHover] = _fullOpacityOnHover.ButtonPressed ? "true" : "false",
+                [AttributionDisplay.ModeParameter] = _linkedAttribution.ButtonPressed ? "true" : "false",
             };
             var configuration = new DashboardConfiguration(
                 _editingInstanceId,
@@ -477,6 +488,8 @@ namespace STS2RitsuMetrics.Ui
             _windowOpacity.SetValue(ModData.Settings.WindowOpacityPercent);
             _backgroundOpacity.SetValue(ModData.Settings.OpacityPercent);
             SetFullOpacityOnHover(true);
+            _linkedAttribution.ButtonPressed = ModData.Settings.AttributeTriggeredEffects;
+            _linkedAttribution.Text = ModLocalization.Get(_linkedAttribution.ButtonPressed ? "attribution.linked" : "attribution.direct", "Direct");
             PreviewOpacity();
         }
 

@@ -546,6 +546,27 @@ namespace STS2RitsuMetrics.Domain
             }
 
             source.Add(observation.Value);
+            if (observation.Tags.TryGetValue("view.direct.key", out var directKey))
+            {
+                Enum.TryParse<AnalyticsSourceKind>(observation.Tags.GetValueOrDefault("view.direct.kind"), out var kind);
+                AddView(AttributionDisplay.DirectPrefix, new(directKey, kind,
+                    observation.Tags.GetValueOrDefault("view.direct.model", string.Empty),
+                    observation.Tags.GetValueOrDefault("view.direct.name", directKey)));
+                var effectKey = observation.Tags.GetValueOrDefault("view.effect.key", directKey);
+                AddView(AttributionDisplay.ChildrenPrefix,
+                    new(observation.Source.Key + "\u001f" + effectKey, AnalyticsSourceKind.Unknown, string.Empty,
+                        observation.Tags.GetValueOrDefault("view.effect.name", effectKey)));
+            }
+
+            void AddView(string prefix, SourceDescriptor descriptor)
+            {
+                var key = prefix + observation.MetricId;
+                if (!_sources.TryGetValue(key, out var values))
+                    _sources[key] = values = new(StringComparer.Ordinal);
+                if (!values.TryGetValue(descriptor.Key, out var value))
+                    values[descriptor.Key] = value = new(descriptor);
+                value.Add(observation.Value);
+            }
         }
 
         public PlayerMetricSnapshot Snapshot()
@@ -575,7 +596,7 @@ namespace STS2RitsuMetrics.Domain
                 StringComparer.Ordinal);
             foreach (var (metricId, values) in _sources)
             {
-                if (metricIds != null && !metricIds.Contains(metricId))
+                if (metricIds != null && !AttributionDisplay.Includes(metricIds, metricId))
                     continue;
                 sourceValues.Add(metricId, values.Values
                     .Select(source => source.Snapshot())

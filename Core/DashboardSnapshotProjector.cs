@@ -38,7 +38,7 @@ namespace STS2RitsuMetrics.Core
                     .Where(item => metricIds.Contains(item.Key))
                     .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
                 Sources = player.Sources
-                    .Where(item => metricIds.Contains(item.Key))
+                    .Where(item => AttributionDisplay.Includes(metricIds, item.Key))
                     .ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal),
             };
         }

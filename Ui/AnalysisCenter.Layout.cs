@@ -2,6 +2,8 @@
 
 using Godot;
 using STS2RitsuMetrics.Api;
+using STS2RitsuMetrics.Core;
+using STS2RitsuMetrics.Data;
 using STS2RitsuMetrics.Localization;
 
 namespace STS2RitsuMetrics.Ui
@@ -105,6 +107,17 @@ namespace STS2RitsuMetrics.Ui
             subtitle.AddThemeColorOverride("font_color", new("94A3B8FF"));
             titles.AddChild(subtitle);
             _header.AddChild(titles);
+            var attribution = HeaderButton(string.Empty, string.Empty, DashboardButtonKind.Subtle, 66f);
+            attribution.ToggleMode = true;
+            attribution.SetPressedNoSignal(ModData.Settings.AttributeTriggeredEffects);
+            _parameters.TryAdd(AttributionDisplay.ModeParameter, attribution.ButtonPressed ? "true" : "false");
+            attribution.Text = ModLocalization.Get(attribution.ButtonPressed ? "attribution.linked" : "attribution.direct", "Direct");
+            attribution.Toggled += linked =>
+            {
+                attribution.Text = ModLocalization.Get(linked ? "attribution.linked" : "attribution.direct", "Direct");
+                SetParameter(AttributionDisplay.ModeParameter, linked ? "true" : "false");
+            };
+            _header.AddChild(attribution);
             var refresh = HeaderIconButton(DashboardIcon.Refresh,
                 ModLocalization.Get("analysis.refresh", "Refresh history"),
                 DashboardButtonKind.Subtle);

@@ -257,6 +257,8 @@ namespace STS2RitsuMetrics.Ui
                     source.Name,
                     source.Players.Count,
                     source.TotalOccurrences,
+                    LinkedAttribution(context),
+                    _expandedSources.Contains($"effects::{source.Key}"),
                     color,
                     maximum,
                     string.Join('\u001d', metrics.Select(metric =>
@@ -265,13 +267,15 @@ namespace STS2RitsuMetrics.Ui
                 {
                     var content = new VBoxContainer();
                     content.AddThemeConstantOverride("separation", 4);
-                    content.AddChild(SourceHeader(source, color, context.Style));
+                    var header = SourceHeader(source, color, context.Style);
+                    content.AddChild(header);
                     // ReSharper disable once ForeachCanBeConvertedToQueryUsingAnotherGetEnumerator
                     foreach (var (metricId, value) in metrics)
                         content.AddChild(Meter(MetricName(metricId),
                             Format(value),
                             Math.Abs(value), maximum, MetricColor(metricId, context.Style), context.Style,
                             Math.Max(23, context.Style.RowHeight - 7)));
+                    AddSourceExpansion(header, content, context, source.Key);
                     return Surface(content, context.Style, color);
                 }), 46f + metrics.Length * (Math.Max(23, context.Style.RowHeight - 7) + 4f)));
             }
@@ -798,7 +802,7 @@ namespace STS2RitsuMetrics.Ui
                     source.HpLost, maximum, style.NegativeColor, style, Math.Max(22, style.RowHeight - 8)));
         }
 
-        private static VariableReconciledRow CardEffectVirtualRow(
+        private VariableReconciledRow CardEffectVirtualRow(
             string playerKey,
             SourceRollup source,
             bool card,
@@ -811,13 +815,15 @@ namespace STS2RitsuMetrics.Ui
                 source.Kind,
                 source.Name,
                 card,
+                _lastContext != null && LinkedAttribution(_lastContext),
+                _expandedSources.Contains($"effects:{playerKey}:{source.Key}"),
                 string.Join('\u001d', source.Totals.OrderBy(item => item.Key, StringComparer.Ordinal)),
                 string.Join('\u001d', source.Occurrences.OrderBy(item => item.Key, StringComparer.Ordinal)));
             return new(new($"{(card ? "card" : "effect")}:{playerKey}:{source.Key}", fingerprint,
-                () => CardEffectRow(source, card, style)), 142f);
+                () => CardEffectRow(source, card, style, playerKey)), 142f);
         }
 
-        private static Control CardEffectRow(SourceRollup source, bool card, DashboardStyleDefinition style)
+        private Control CardEffectRow(SourceRollup source, bool card, DashboardStyleDefinition style, string playerKey)
         {
             var color = SourceColor(source.Kind, style);
             var damage = source.Totals.GetValueOrDefault(MetricIds.DamageDealt);
@@ -866,6 +872,7 @@ namespace STS2RitsuMetrics.Ui
                     Stat("analysis.debuffs", "Debuffs", source.Totals.GetValueOrDefault(MetricIds.DebuffsApplied),
                         style.WarningColor),
                 ]));
+            if (_lastContext != null) AddSourceExpansion(header, box, _lastContext, source.Key, playerKey);
             return Surface(box, style, color);
         }
 
@@ -1103,7 +1110,8 @@ namespace STS2RitsuMetrics.Ui
                     MetricIds.Overkill,
                 }.Select(metricId => (MetricId: metricId,
                     Sources: MetricSourcesForDisplay(player, metricId)))
-                : player.Sources.Select(metric => (MetricId: metric.Key, Sources: metric.Value));
+                : player.Sources.Where(metric => !metric.Key.StartsWith("view.", StringComparison.Ordinal))
+                    .Select(metric => (MetricId: metric.Key, Sources: metric.Value));
             foreach (var (metricId, sources) in metrics)
                 foreach (var rawSource in sources)
                 {

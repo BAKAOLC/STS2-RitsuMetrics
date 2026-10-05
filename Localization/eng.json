@@ -1,4 +1,7 @@
 {
+  "settings.attributeTriggeredEffects": "Synergy display",
+  "attribution.linked": "Synergy",
+  "attribution.direct": "Direct",
   "overview.configure": "Displayed metrics",
   "overview.configureHint": "Choose 1–16 metrics and reorder with the arrows. Applies to all overviews after saving.",
   "overview.preset.default": "Balanced",
@@ -74,7 +77,6 @@
   "overview.keyMetrics.meta": "Damage · survival · actions · support",
   "overview.teamTotal": "Team total",
   "overview.combatFlow": "Combat flow",
-  "overview.combatFlow.meta": "Matched AD / RD sources and offense-defense turn trends",
   "overview.turnTrend.section": "{0} turn trend",
   "overview.combatTrend.section": "{0} by combat",
   "overview.combatAnalysis": "Combat analysis",

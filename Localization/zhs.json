@@ -1,4 +1,7 @@
 {
+  "settings.attributeTriggeredEffects": "连携显示",
+  "attribution.linked": "连携",
+  "attribution.direct": "普通",
   "overview.configure": "显示指标",
   "overview.configureHint": "选择 1–16 项指标，用箭头调整顺序；保存后应用于所有数据总览。",
   "overview.preset.default": "均衡预设",
@@ -74,7 +77,6 @@
   "overview.keyMetrics.meta": "伤害 · 生存 · 行动 · 支援",
   "overview.teamTotal": "团队合计",
   "overview.combatFlow": "战斗走势",
-  "overview.combatFlow.meta": "同口径 AD / RD 来源与攻防回合趋势",
   "overview.turnTrend.section": "{0}回合趋势",
   "overview.combatTrend.section": "逐场战斗{0}",
   "overview.combatAnalysis": "战斗分析",

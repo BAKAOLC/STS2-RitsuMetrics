@@ -68,7 +68,7 @@ namespace STS2RitsuMetrics.Ui
             if (ModData.Settings.OverviewShowCharts)
             {
                 Rows.AddChild(SectionTitle(ModLocalization.Get("overview.combatFlow", "Combat flow"),
-                    ModLocalization.Get("overview.combatFlow.meta", "Damage sources, composition and turn trends"),
+                    null,
                     context.Style, Accent(context.Style, 3)));
                 var flow = ResponsiveGrid(2, 280f);
                 flow.AddChild(BuildTopSources(players, MetricIds.DamageDealt, "overview.topSources.ad",
@@ -408,7 +408,7 @@ namespace STS2RitsuMetrics.Ui
 
         private static HBoxContainer SectionTitle(
             string title,
-            string meta,
+            string? meta,
             DashboardStyleDefinition style,
             string accent)
         {
@@ -416,6 +416,8 @@ namespace STS2RitsuMetrics.Ui
             var heading = TruncatedLabel(title, style, false, style.FontSize + 3);
             heading.Modulate = ColorOf(accent);
             row.AddChild(heading);
+            if (string.IsNullOrEmpty(meta))
+                return row;
             var details = Label(meta, style, true, Math.Max(10, style.FontSize - 1));
             details.HorizontalAlignment = HorizontalAlignment.Right;
             row.AddChild(details);

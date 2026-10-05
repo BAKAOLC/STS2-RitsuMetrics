@@ -22,6 +22,7 @@ namespace STS2RitsuMetrics.Data.Models
         public bool LockWindow { get; set; }
         public bool HideOutsideCombat { get; set; }
         public bool ShowPercentages { get; set; } = true;
+        public bool AttributeTriggeredEffects { get; set; }
         public bool ShowGameOverOverviewButton { get; set; } = true;
         public string DefaultDashboardLayout { get; set; } = DashboardParameterValues.SingleLine;
         public int ScalePercent { get; set; } = 100;

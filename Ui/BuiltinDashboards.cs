@@ -244,6 +244,11 @@ namespace STS2RitsuMetrics.Ui
 
         public void Refresh(DashboardRenderContext context)
         {
+            if (context.Snapshot != null)
+                context = context with
+                {
+                    Snapshot = AttributionDisplay.Project(context.Snapshot, LinkedAttribution(context)),
+                };
             if (!ReconcileRowsOnRefresh)
                 Clear(Rows);
             var singleLine = DashboardPresentation.SingleLine(context.Parameters);
@@ -700,6 +705,91 @@ namespace STS2RitsuMetrics.Ui
         }
 
         protected abstract void Render(DashboardRenderContext context);
+
+        private protected readonly HashSet<string> _expandedSources = new(StringComparer.Ordinal);
+
+        protected static bool LinkedAttribution(DashboardRenderContext context) =>
+            context.Parameters.TryGetValue(AttributionDisplay.ModeParameter, out var value)
+                ? value == "true" : ModData.Settings.AttributeTriggeredEffects;
+
+        protected Control SourceMeter(DashboardRenderContext context, PlayerMetricSnapshot player,
+            string metricId, SourceMetricSnapshot source, string valueText, decimal maximum, string accent, int height)
+        {
+            var children = LinkedAttribution(context)
+                ? AttributionDisplay.Children(player, metricId, source.SourceKey) : [];
+            var key = $"{player.PlayerKey}:{metricId}:{source.SourceKey}";
+            var expanded = _expandedSources.Contains(key);
+            var box = new VBoxContainer();
+            box.AddThemeConstantOverride("separation", 2);
+            var bar = Meter((children.Count > 0 ? expanded ? "▾ " : "▸ " : "") + source.DisplayName,
+                valueText, source.Value, maximum, accent, context.Style, height);
+            box.AddChild(bar);
+            if (children.Count == 0) return box;
+            bar.MouseFilter = Control.MouseFilterEnum.Stop;
+            bar.MouseDefaultCursorShape = Control.CursorShape.PointingHand;
+            bar.GuiInput += input =>
+            {
+                if (input is not InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left }) return;
+                if (!_expandedSources.Add(key)) _expandedSources.Remove(key);
+                Refresh(context);
+                bar.AcceptEvent();
+            };
+            if (expanded)
+                foreach (var child in children)
+                {
+                    var indent = new MarginContainer();
+                    indent.AddThemeConstantOverride("margin_left", 16);
+                    indent.AddChild(Meter(child.DisplayName, Format(child.Value), child.Value,
+                        Math.Max(1m, source.Value), accent, context.Style, height));
+                    box.AddChild(indent);
+                }
+            return box;
+        }
+
+        protected void AddSourceExpansion(Control header, VBoxContainer content, DashboardRenderContext context,
+            string sourceKey, string? playerKey = null)
+        {
+            if (!LinkedAttribution(context) || context.Snapshot == null) return;
+            var children = context.Snapshot.Players.Where(player => playerKey == null || player.PlayerKey == playerKey)
+                .SelectMany(player => new[] { MetricIds.DamageContribution, MetricIds.DefenseContribution }
+                    .SelectMany(metric => AttributionDisplay.Children(player, metric, sourceKey)
+                        .Select(child => (Metric: metric, Child: child))))
+                .GroupBy(item => (item.Metric, item.Child.SourceKey))
+                .Select(group => (group.Key.Metric, Child: group.First().Child with
+                {
+                    Value = group.Sum(item => item.Child.Value),
+                })).ToArray();
+            if (children.Length == 0) return;
+            var key = $"effects:{playerKey}:{sourceKey}";
+            var expanded = _expandedSources.Contains(key);
+            if (header is BoxContainer box)
+            {
+                var arrow = Label(expanded ? "▾" : "▸", context.Style, true);
+                box.AddChild(arrow);
+                box.MoveChild(arrow, 0);
+            }
+            header.MouseFilter = Control.MouseFilterEnum.Stop;
+            header.MouseDefaultCursorShape = Control.CursorShape.PointingHand;
+            foreach (var child in header.GetChildren().OfType<Control>()) child.MouseFilter = Control.MouseFilterEnum.Ignore;
+            header.GuiInput += input =>
+            {
+                if (input is not InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left }) return;
+                if (!_expandedSources.Add(key)) _expandedSources.Remove(key);
+                header.AcceptEvent();
+                Refresh(context);
+            };
+            if (!expanded) return;
+            foreach (var (metric, child) in children.OrderByDescending(item => item.Child.Value))
+            {
+                var indent = new MarginContainer();
+                indent.AddThemeConstantOverride("margin_left", 16);
+                indent.AddChild(Meter(child.DisplayName, Format(child.Value), child.Value,
+                    Math.Max(1m, children.Where(item => item.Metric == metric).Sum(item => item.Child.Value)),
+                    metric == MetricIds.DefenseContribution ? context.Style.PositiveColor : context.Style.NegativeColor,
+                    context.Style, context.Style.RowHeight));
+                content.AddChild(indent);
+            }
+        }
 
         protected static Label Label(
             string text,
@@ -1587,10 +1677,11 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
+                MetricIds.DamageDealt => [MetricIds.DamageDealt, MetricIds.DamageContribution],
                 MetricIds.DamageContribution =>
                     [MetricIds.DamageContribution, MetricIds.DamageDealt],
                 MetricIds.EffectiveHpDamageDealt =>
-                    [MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt],
+                    [MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt, MetricIds.EffectiveHpDamageContribution],
                 MetricIds.EffectiveHpDamageContribution =>
                     [MetricIds.EffectiveHpDamageContribution, MetricIds.DamageDealt],
                 MetricIds.DefenseContribution =>
@@ -1793,10 +1884,11 @@ namespace STS2RitsuMetrics.Ui
                 var percent = value > 0m ? $"{source.Value / value:P1}" : "—";
                 return new ReconciledRow($"source:{source.SourceKey}",
                     string.Join("\u001e", MeterStyleFingerprint(context), source.DisplayName, source.Value,
-                        source.Occurrences, value, sourceMaximum),
-                    () => Meter(source.DisplayName,
+                        source.Occurrences, value, sourceMaximum, LinkedAttribution(context),
+                        _expandedSources.Contains($"{player.PlayerKey}:{metricId}:{source.SourceKey}")),
+                    () => SourceMeter(context, player, metricId, source,
                         $"{Format(source.Value)}  ·  {percent}  ·  ×{source.Occurrences}",
-                        source.Value, sourceMaximum, accent, context.Style,
+                        sourceMaximum, accent,
                         singleLine ? context.Style.RowHeight : Math.Max(24, context.Style.RowHeight - 5)));
             }));
 

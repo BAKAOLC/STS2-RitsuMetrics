@@ -40,6 +40,9 @@ namespace STS2RitsuMetrics.Settings
                     .AddToggle("show_percentages", T("settings.showPercentages", "Show percentages"),
                         Binding(settings => settings.ShowPercentages,
                             (settings, value) => settings.ShowPercentages = value))
+                    .AddToggle("attribute_triggered_effects", T("settings.attributeTriggeredEffects", "Attribute triggered effects"),
+                        Binding(settings => settings.AttributeTriggeredEffects,
+                            (settings, value) => settings.AttributeTriggeredEffects = value))
                     .AddChoice("default_dashboard_layout",
                         T("settings.defaultDashboardLayout", "Default layout for new dashboards"),
                         Binding(settings => settings.DefaultDashboardLayout,
