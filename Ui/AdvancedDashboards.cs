@@ -737,9 +737,9 @@ namespace STS2RitsuMetrics.Ui
                                DamageContributionSemantics.GetRole(item) == DamageContributionRole.Modifier)
                 .ToArray(), item => item.EffectiveContribution, item => item.Source.DisplayName);
             AddMaximum(records, RecordGroup.Defense, "analysis.recordMitigator", "Largest mitigation", contributions
-                    .Where(item => item.EffectiveContribution < 0m &&
+                    .Where(item => (item.AllocatedContribution ?? item.EffectiveContribution) < 0m &&
                                    DamageContributionSemantics.GetRole(item) == DamageContributionRole.Modifier)
-                    .ToArray(), item => -item.EffectiveContribution,
+                    .ToArray(), item => -(item.AllocatedContribution ?? item.EffectiveContribution),
                 item => item.Source.DisplayName);
             var blocks = combats.SelectMany(combat => combat.Players.Select(player => new NamedValue(
                 player.DisplayName, Metric(player, MetricIds.BlockGained)))).ToArray();

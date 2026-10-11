@@ -603,5 +603,16 @@
   "source.overkillResolution": "HP limit",
   "source.legacyUnknownOrb": "Unidentified orb (legacy record)",
   "source.unknown": "Unknown source",
-  "entity.unknownPlayer": "Unknown player"
+  "entity.unknownPlayer": "Unknown player",
+  "damage.detail.process": "Actual settlement",
+  "dashboard.tooltip.events": "{0} events",
+  "dashboard.tooltip.effects": "Effects",
+  "dashboard.tooltip.average": "Per event",
+  "dashboard.tooltip.parentShare": "Share of {0}",
+  "damage.detail.provider": "{0}: allocated {1} · realized {2}",
+  "damage.detail.observed": "{0}: observed {1} · realized {2}",
+  "damage.detail.base": "Base: {0}",
+  "damage.detail.allocation": "Synergy allocation · average marginal contribution",
+  "damage.detail.share": "{0}: alone {1} · shared {2} · allocated {3} · realized {4}",
+  "damage.detail.total": "Realized total: {0} · HP contribution: {1}"
 }

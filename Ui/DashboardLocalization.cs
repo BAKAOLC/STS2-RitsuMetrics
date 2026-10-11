@@ -166,14 +166,60 @@ namespace STS2RitsuMetrics.Ui
                 lines.Add(Text("timeline.tooltip.parent", "Caused by: {0}",
                     parent == null ? timelineEvent.ParentEventId : TimelineDescription(parent)));
             if (timelineEvent.Damage is { } damage)
+            {
+                lines.Clear();
+                lines.Add(TimelineDescription(timelineEvent, causalSource, causalActor));
+                lines.Add(ModLocalization.Get("damage.detail.process", "Actual settlement"));
+                lines.Add(Text("damage.detail.base", "Base: {0}", Format(damage.RequestedAmount)));
+                foreach (var item in damage.Contributions.Where(item => item.Stage != DamageContributionStage.Base))
+                    lines.Add($"{ContributionSource(item)}{(item.Factor is { } factor ? $" ×{Number(factor)}" : "")}: " +
+                              $"{Number(item.InputValue)} → {Number(item.OutputValue)} ({Delta(item.RawContribution)})");
                 lines.Add(Text("timeline.tooltip.damage",
                     "Requested {0} · modified {1} · HP {2} · Block {3} · overkill {4}",
                     Format(damage.RequestedAmount), Format(damage.ModifiedAmount), Format(damage.HpLost),
                     Format(damage.BlockedAmount), Format(damage.OverkillAmount)));
+                if (damage.Contributions.Any(item => item.AllocatedContribution != null))
+                {
+                    lines.Add(ModLocalization.Get("damage.detail.allocation", "Synergy allocation · average marginal contribution"));
+                    foreach (var item in damage.Contributions.Where(item =>
+                                 DamageContributionSemantics.GetRole(item) != DamageContributionRole.Settlement))
+                    {
+                        if (item.UsesAverageMarginal || item.Stage is DamageContributionStage.Base or DamageContributionStage.Execution)
+                            lines.Add(Text("damage.detail.share", "{0}: alone {1} · shared {2} · allocated {3} · realized {4}",
+                            ContributionSource(item), Delta(item.StandaloneContribution ?? item.RawContribution),
+                            Delta((item.AllocatedContribution ?? item.RawContribution) - (item.StandaloneContribution ?? item.RawContribution)),
+                            Delta(item.AllocatedContribution ?? item.RawContribution), Number(item.EffectiveContribution)));
+                        else
+                            lines.Add(Text("damage.detail.observed", "{0}: observed {1} · realized {2}",
+                                ContributionSource(item), Delta(item.AllocatedContribution ?? item.RawContribution), Number(item.EffectiveContribution)));
+                        if (item.Providers is { Count: > 0 })
+                        {
+                            var amounts = STS2RitsuMetrics.Core.DamageContributionAllocation.Scale(
+                                item.Providers.Select(provider => provider.EffectiveContribution).ToArray(), item.EffectiveContribution);
+                            var allocated = item.AllocatedContribution ?? item.RawContribution;
+                            var allocatedAmounts = STS2RitsuMetrics.Core.DamageContributionAllocation.Scale(
+                                item.Providers.Select(provider => provider.EffectiveContribution).ToArray(), Math.Abs(allocated));
+                            for (var i = 0; i < item.Providers.Count; i++)
+                            {
+                                var provider = item.Providers[i];
+                                if (provider.Source.Key == item.Source.Key) continue;
+                                lines.Add("  ↳ " + Text("damage.detail.provider", "{0}: allocated {1} · realized {2}",
+                                    provider.Source.DisplayName, Delta(Math.Sign(allocated) * allocatedAmounts[i]), Number(amounts[i])));
+                            }
+                        }
+                    }
+                    lines.Add(Text("damage.detail.total", "Realized total: {0} · HP contribution: {1}",
+                        Number(damage.Contributions.Sum(item => item.EffectiveContribution)), Number(damage.HpLost)));
+                }
+                return lines;
+            }
             foreach (var (key, detail) in timelineEvent.Details.Where(item => !string.IsNullOrWhiteSpace(item.Value)))
                 lines.Add($"{key}: {detail}");
             return lines;
         }
+
+        private static string Number(decimal value) => value.ToString("0.####", CultureInfo.CurrentCulture);
+        private static string Delta(decimal value) => value >= 0m ? "+" + Number(value) : Number(value);
 
         private static string PowerDescription(
             CombatTimelineEvent timelineEvent,

@@ -723,6 +723,9 @@ namespace STS2RitsuMetrics.Ui
             box.AddThemeConstantOverride("separation", 2);
             var bar = Meter((children.Count > 0 ? expanded ? "▾ " : "▸ " : "") + source.DisplayName,
                 valueText, source.Value, maximum, accent, context.Style, height);
+            bar.Name = "SourceMeterBar";
+            DashboardTooltip.SetRow(bar, SourceTooltip(player, metricId, source, LinkedAttribution(context)),
+                ModLocalization.Format("dashboard.tooltip.events", "{0} events", source.Occurrences));
             box.AddChild(bar);
             if (children.Count == 0) return box;
             bar.MouseFilter = Control.MouseFilterEnum.Stop;
@@ -739,11 +742,98 @@ namespace STS2RitsuMetrics.Ui
                 {
                     var indent = new MarginContainer();
                     indent.AddThemeConstantOverride("margin_left", 16);
-                    indent.AddChild(Meter(child.DisplayName, Format(child.Value), child.Value,
-                        Math.Max(1m, source.Value), accent, context.Style, height));
+                    var childBar = Meter(child.DisplayName, Format(child.Value), child.Value,
+                        Math.Max(1m, source.Value), accent, context.Style, height);
+                    childBar.SetMeta("source_key", child.SourceKey);
+                    DashboardTooltip.SetRow(childBar, MetricTooltip(child.DisplayName, metricId, child.Value,
+                        source.Value, source.DisplayName));
+                    indent.AddChild(childBar);
                     box.AddChild(indent);
                 }
             return box;
+        }
+
+        protected static IReadOnlyList<string> SourceTooltip(PlayerMetricSnapshot player, string metricId, SourceMetricSnapshot source, bool linked)
+        {
+            var displayMetric = linked && metricId == MetricIds.DamageDealt ? MetricIds.DamageContribution : metricId;
+            var lines = MetricTooltip(source.DisplayName, displayMetric, source.Value, Metric(player, metricId)).ToList();
+            if (source.Occurrences > 0)
+                lines.Add(ModLocalization.Get("dashboard.tooltip.average", "Per event") + ": " + Format(source.Value / source.Occurrences));
+            var metrics = new[] { MetricIds.DamageDealt, MetricIds.DamageContribution,
+                MetricIds.EffectiveHpDamageDealt, MetricIds.Overkill, MetricIds.DamageAmplified };
+            foreach (var metric in metrics)
+            {
+                if (metric == displayMetric) continue;
+                if (!player.Sources.TryGetValue(AttributionDisplay.ComparisonPrefix + metric, out var values)) continue;
+                var value = values.FirstOrDefault(item => item.SourceKey == source.SourceKey)?.Value ?? 0m;
+                var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metric);
+                if (definition == null) continue;
+                var name = ModLocalization.Get(definition.NameLocalizationKey, definition.FallbackName);
+                var line = $"{name}: {Format(value)}";
+                if (!lines.Contains(line)) lines.Add(line);
+            }
+            if (linked)
+            {
+                var effects = AttributionDisplay.Children(player, metricId, source.SourceKey);
+                if (effects.Count > 0) lines.Add(ModLocalization.Get("dashboard.tooltip.effects", "Effects"));
+                foreach (var effect in effects) lines.Add($"{effect.DisplayName}: {Format(effect.Value)}");
+            }
+            return lines;
+        }
+
+        protected static IReadOnlyList<string> PlayerMetricTooltip(PlayerMetricSnapshot player, string metricId,
+            decimal value, decimal total, bool linked)
+        {
+            var displayMetric = linked && metricId == MetricIds.DamageDealt ? MetricIds.DamageContribution : metricId;
+            var lines = MetricTooltip(player.DisplayName, displayMetric, value, total).ToList();
+            foreach (var metric in new[] { MetricIds.DamageDealt, MetricIds.DamageContribution,
+                         MetricIds.EffectiveHpDamageDealt, MetricIds.Overkill, MetricIds.DamageAmplified })
+            {
+                if (metric == displayMetric || !player.Sources.TryGetValue(AttributionDisplay.ComparisonPrefix + metric, out var sources)) continue;
+                var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metric);
+                if (definition == null) continue;
+                lines.Add($"{ModLocalization.Get(definition.NameLocalizationKey, definition.FallbackName)}: {Format(sources.Sum(item => item.Value))}");
+            }
+            return lines;
+        }
+
+        protected static void UpdateSourceMeter(Control root, PlayerMetricSnapshot player, string metricId,
+            SourceMetricSnapshot source, decimal maximum, string valueText, bool linked)
+        {
+            var bar = root.GetNode<ProgressBar>("SourceMeterBar");
+            bar.MaxValue = (double)maximum;
+            bar.Value = (double)source.Value;
+            bar.GetNode<Label>("MeterLabels/MeterAmount").Text = valueText;
+            DashboardTooltip.SetRow(bar, SourceTooltip(player, metricId, source, linked),
+                ModLocalization.Format("dashboard.tooltip.events", "{0} events", source.Occurrences));
+            var children = AttributionDisplay.Children(player, metricId, source.SourceKey);
+            foreach (var indent in root.GetChildren().OfType<MarginContainer>())
+            {
+                var childBar = indent.GetChild<ProgressBar>(0);
+                var key = childBar.GetMeta("source_key").AsString();
+                var child = children.FirstOrDefault(item => item.SourceKey == key);
+                if (child == null) continue;
+                childBar.MaxValue = (double)Math.Max(1m, source.Value);
+                childBar.Value = (double)child.Value;
+                childBar.GetNode<Label>("MeterLabels/MeterAmount").Text = Format(child.Value);
+                DashboardTooltip.SetRow(childBar, MetricTooltip(child.DisplayName, metricId, child.Value, source.Value, source.DisplayName),
+                    ModLocalization.Format("dashboard.tooltip.events", "{0} events", child.Occurrences));
+            }
+        }
+
+        protected static IReadOnlyList<string> MetricTooltip(string title, string metricId, decimal value,
+            decimal total, string? parent = null)
+        {
+            var definition = Main.Api.MetricDefinitions.FirstOrDefault(item => item.Id == metricId);
+            var name = definition == null ? metricId : ModLocalization.Get(definition.NameLocalizationKey, definition.FallbackName);
+            var lines = new List<string>
+            {
+                title,
+                $"{name}: {Format(value)}",
+                $"{(parent == null ? ModLocalization.Get("dashboard.tooltip.share", "Share") : ModLocalization.Format("dashboard.tooltip.parentShare", "Share of {0}", parent))}: " +
+                (total > 0m ? $"{value / total:P1}" : "—"),
+            };
+            return lines;
         }
 
         protected void AddSourceExpansion(Control header, VBoxContainer content, DashboardRenderContext context,
@@ -783,10 +873,13 @@ namespace STS2RitsuMetrics.Ui
             {
                 var indent = new MarginContainer();
                 indent.AddThemeConstantOverride("margin_left", 16);
-                indent.AddChild(Meter(child.DisplayName, Format(child.Value), child.Value,
+                var childBar = Meter(child.DisplayName, Format(child.Value), child.Value,
                     Math.Max(1m, children.Where(item => item.Metric == metric).Sum(item => item.Child.Value)),
                     metric == MetricIds.DefenseContribution ? context.Style.PositiveColor : context.Style.NegativeColor,
-                    context.Style, context.Style.RowHeight));
+                    context.Style, context.Style.RowHeight);
+                DashboardTooltip.SetRow(childBar, MetricTooltip(child.DisplayName, metric, child.Value,
+                    children.Where(item => item.Metric == metric).Sum(item => item.Child.Value)));
+                indent.AddChild(childBar);
                 content.AddChild(indent);
             }
         }
@@ -1076,7 +1169,7 @@ namespace STS2RitsuMetrics.Ui
                 bar.AddChild(label);
             }
 
-            DashboardTooltip.SetValue(bar, text, value, maximum);
+            DashboardTooltip.SetValue(bar, text, value);
             return bar;
         }
 
@@ -1115,6 +1208,7 @@ namespace STS2RitsuMetrics.Ui
             var bar = Meter(string.Empty, value, maximum, color, style, height);
             var labels = new HBoxContainer
             {
+                Name = "MeterLabels",
                 MouseFilter = Control.MouseFilterEnum.Ignore,
                 LayoutMode = 1,
                 AnchorsPreset = (int)Control.LayoutPreset.FullRect,
@@ -1126,13 +1220,14 @@ namespace STS2RitsuMetrics.Ui
             name.MouseFilter = Control.MouseFilterEnum.Ignore;
             labels.AddChild(name);
             var amount = Label(valueText, style, false, style.FontSize + 1);
+            amount.Name = "MeterAmount";
             ApplyMeterTextReadability(amount);
             amount.MouseFilter = Control.MouseFilterEnum.Ignore;
             amount.CustomMinimumSize = new(72, 0);
             amount.HorizontalAlignment = HorizontalAlignment.Right;
             labels.AddChild(amount);
             bar.AddChild(labels);
-            DashboardTooltip.SetValue(bar, labelText, value, maximum, valueText);
+            DashboardTooltip.SetValue(bar, labelText, value);
             return new(bar, name, amount);
         }
 
@@ -1677,13 +1772,10 @@ namespace STS2RitsuMetrics.Ui
         {
             return metricId switch
             {
-                MetricIds.DamageDealt => [MetricIds.DamageDealt, MetricIds.DamageContribution],
-                MetricIds.DamageContribution =>
-                    [MetricIds.DamageContribution, MetricIds.DamageDealt],
-                MetricIds.EffectiveHpDamageDealt =>
-                    [MetricIds.EffectiveHpDamageDealt, MetricIds.DamageDealt, MetricIds.EffectiveHpDamageContribution],
-                MetricIds.EffectiveHpDamageContribution =>
-                    [MetricIds.EffectiveHpDamageContribution, MetricIds.DamageDealt],
+                MetricIds.DamageDealt or MetricIds.DamageContribution or MetricIds.EffectiveHpDamageDealt or
+                    MetricIds.EffectiveHpDamageContribution =>
+                    [MetricIds.DamageDealt, MetricIds.DamageContribution, MetricIds.EffectiveHpDamageDealt,
+                        MetricIds.EffectiveHpDamageContribution, MetricIds.Overkill, MetricIds.DamageAmplified],
                 MetricIds.DefenseContribution =>
                 [
                     MetricIds.DefenseContribution,
@@ -1761,12 +1853,13 @@ namespace STS2RitsuMetrics.Ui
             }
 
             _selectedPlayerKey = null;
-            RenderRanking(context, values, total, playerAccents);
+            RenderRanking(context, metricId, values, total, playerAccents);
             Status.Text = snapshot.EncounterName;
         }
 
         private void RenderRanking(
             DashboardRenderContext context,
+            string metricId,
             MeterEntry[] values,
             decimal total,
             IReadOnlyDictionary<string, string> playerAccents)
@@ -1803,14 +1896,7 @@ namespace STS2RitsuMetrics.Ui
                     {
                         UpdatePlayerMeterRow(row, index + 1, value, total, maximum, context.ShowPercentages,
                             singleLine);
-                        DashboardTooltip.Set(row,
-                        [
-                            player.DisplayName,
-                            $"{ModLocalization.Get("dashboard.tooltip.value", "Value")}: {Format(value)}",
-                            $"{ModLocalization.Get("dashboard.tooltip.share", "Share")}: " +
-                            (total > 0m ? $"{value / total:P1}" : "—"),
-                            ModLocalization.Get("dashboard.openPlayerDetail", "Open source details"),
-                        ]);
+                        DashboardTooltip.SetRow(row, PlayerMetricTooltip(player, metricId, value, total, LinkedAttribution(context)));
                     });
             }));
         }
@@ -1851,6 +1937,7 @@ namespace STS2RitsuMetrics.Ui
                         };
                         var playerHeader = PlayerHeader(player, 0, value, total, accent,
                             context.Style, singleLine);
+                        DashboardTooltip.SetRow(playerHeader, PlayerMetricTooltip(player, metricId, value, total, LinkedAttribution(context)));
                         if (!singleLine)
                         {
                             var stack = new VBoxContainer();
@@ -1883,13 +1970,15 @@ namespace STS2RitsuMetrics.Ui
             {
                 var percent = value > 0m ? $"{source.Value / value:P1}" : "—";
                 return new ReconciledRow($"source:{source.SourceKey}",
-                    string.Join("\u001e", MeterStyleFingerprint(context), source.DisplayName, source.Value,
-                        source.Occurrences, value, sourceMaximum, LinkedAttribution(context),
+                    string.Join("\u001e", MeterStyleFingerprint(context), source.DisplayName, LinkedAttribution(context),
+                        string.Join('|', AttributionDisplay.Children(player, metricId, source.SourceKey).Select(child => child.SourceKey)),
                         _expandedSources.Contains($"{player.PlayerKey}:{metricId}:{source.SourceKey}")),
                     () => SourceMeter(context, player, metricId, source,
                         $"{Format(source.Value)}  ·  {percent}  ·  ×{source.Occurrences}",
                         sourceMaximum, accent,
-                        singleLine ? context.Style.RowHeight : Math.Max(24, context.Style.RowHeight - 5)));
+                        singleLine ? context.Style.RowHeight : Math.Max(24, context.Style.RowHeight - 5)),
+                    root => UpdateSourceMeter(root, player, metricId, source, sourceMaximum,
+                        $"{Format(source.Value)}  ·  {percent}  ·  ×{source.Occurrences}", LinkedAttribution(context)));
             }));
 
             ReconcileRows(rows);
@@ -3257,7 +3346,7 @@ namespace STS2RitsuMetrics.Ui
             {
                 var expanded = _expanded.Contains(timelineEvent.EventId);
                 var row = new ReconciledRow(timelineEvent.EventId,
-                    DamageRowFingerprint(timelineEvent, context.Style, expanded), () =>
+                    DamageRowFingerprint(timelineEvent, context.Style, expanded) + LinkedAttribution(context), () =>
                     {
                         var group = new VBoxContainer();
                         group.AddThemeConstantOverride("separation", 5);
@@ -3268,7 +3357,7 @@ namespace STS2RitsuMetrics.Ui
                             RefreshLastPreservingScroll();
                         }));
                         if (expanded)
-                            group.AddChild(DamageEventDetails(timelineEvent, context.Style));
+                            group.AddChild(DamageEventDetails(timelineEvent, context.Style, LinkedAttribution(context)));
                         return group;
                     });
                 var contributionCount = timelineEvent.Damage!.Contributions.Count(item =>
@@ -3378,7 +3467,8 @@ namespace STS2RitsuMetrics.Ui
 
         private static Control DamageEventDetails(
             CombatTimelineEvent timelineEvent,
-            DashboardStyleDefinition style)
+            DashboardStyleDefinition style,
+            bool linked)
         {
             var damage = timelineEvent.Damage!;
             var details = new VBoxContainer();
@@ -3402,21 +3492,22 @@ namespace STS2RitsuMetrics.Ui
             details.AddChild(stages);
             var components = damage.Contributions.Where(item =>
                 DamageContributionSemantics.GetRole(item) != DamageContributionRole.Settlement &&
-                item.RawContribution != 0m).ToArray();
+                (linked ? item.EffectiveContribution : item.RawContribution) != 0m).ToArray();
             if (components.Length > 0)
             {
                 var heading = Label(ModLocalization.Get("dashboard.damage.components", "Damage components"), style,
                     true, Math.Max(10, style.FontSize - 1));
                 details.AddChild(heading);
                 var chart = new DashboardBarChart();
-                chart.SetData(components.Select(contribution => new DashboardBarDatum(
-                    $"{DashboardLocalization.ContributionStage(contribution.Stage)} · " +
-                    DashboardLocalization.ContributionSource(contribution),
-                    Math.Abs(contribution.RawContribution),
-                    contribution.RawContribution > 0m ? style.PositiveColor : style.NegativeColor,
-                    contribution.RawContribution > 0m
-                        ? $"+{Format(contribution.RawContribution)}"
-                        : Format(contribution.RawContribution))), Math.Max(10, style.FontSize - 2));
+                chart.SetData(components.Select(contribution =>
+                {
+                    var amount = linked ? contribution.EffectiveContribution : contribution.RawContribution;
+                    return new DashboardBarDatum(
+                        $"{DashboardLocalization.ContributionStage(contribution.Stage)} · " +
+                        DashboardLocalization.ContributionSource(contribution), Math.Abs(amount),
+                        amount > 0m ? style.PositiveColor : style.NegativeColor,
+                        amount > 0m ? $"+{Format(amount)}" : Format(amount));
+                }), Math.Max(10, style.FontSize - 2));
                 details.AddChild(chart);
             }
 

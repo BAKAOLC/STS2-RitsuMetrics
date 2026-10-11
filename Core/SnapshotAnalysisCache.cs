@@ -142,7 +142,8 @@ namespace STS2RitsuMetrics.Core
                             .SelectMany(item => item.Damage!.Contributions)
                             .Where(item => DamageContributionSemantics.GetRole(item) ==
                                            DamageContributionRole.Modifier)
-                            .Sum(item => Math.Abs(item.EffectiveContribution)),
+                            .Sum(item => item.AllocatedContribution is < 0m
+                                ? -item.AllocatedContribution.Value : Math.Abs(item.EffectiveContribution)),
                         events.Any(item => item.IsExtraTurn),
                         events.FirstOrDefault(item => item.Kind == CombatTimelineKind.Turn)?.Side ??
                         TimelineTurnSide.None);

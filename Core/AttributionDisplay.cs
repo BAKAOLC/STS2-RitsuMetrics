@@ -9,6 +9,7 @@ namespace STS2RitsuMetrics.Core
         internal const string DirectPrefix = "view.direct.";
         internal const string ChildrenPrefix = "view.children.";
         internal const string ModeParameter = "linked_attribution";
+        internal const string ComparisonPrefix = "view.comparison.";
 
         internal static bool Includes(IReadOnlySet<string> metrics, string key) => metrics.Contains(key) ||
             key.StartsWith(DirectPrefix, StringComparison.Ordinal) && metrics.Contains(key[DirectPrefix.Length..]) ||
@@ -47,6 +48,14 @@ namespace STS2RitsuMetrics.Core
         internal static PlayerMetricSnapshot Project(PlayerMetricSnapshot player, bool linked)
         {
             var sources = new Dictionary<string, IReadOnlyList<SourceMetricSnapshot>>(player.Sources, StringComparer.Ordinal);
+            foreach (var metric in new[] { MetricIds.DamageDealt, MetricIds.DamageContribution,
+                         MetricIds.EffectiveHpDamageDealt, MetricIds.Overkill, MetricIds.DamageAmplified })
+                if (!sources.ContainsKey(ComparisonPrefix + metric))
+                {
+                    var key = metric is MetricIds.DamageDealt or MetricIds.EffectiveHpDamageDealt
+                        && player.Sources.ContainsKey(DirectPrefix + metric) ? DirectPrefix + metric : metric;
+                    if (player.Sources.TryGetValue(key, out var values)) sources[ComparisonPrefix + metric] = values;
+                }
             if (linked)
             {
                 var totals = new Dictionary<string, decimal>(player.Totals, StringComparer.Ordinal);

@@ -316,7 +316,7 @@ namespace STS2RitsuMetrics.Capture
                     break;
             }
 
-            if (contribution == 0m)
+            if (contribution == 0m && !(stage == DamageContributionStage.Multiplicative && factor != 1m))
                 return;
             calculation.CurrentValue = output;
             AddModifier(calculation, state.Model, stage, state.InputValue, output, contribution, factor,
@@ -333,7 +333,7 @@ namespace STS2RitsuMetrics.Capture
             decimal? factor,
             string context)
         {
-            if (contribution == 0m)
+            if (contribution == 0m && !(stage == DamageContributionStage.Multiplicative && factor != 1m))
                 return;
             calculation.Modifiers.Add(new(
                 GameDescriptorFactory.Model(model),

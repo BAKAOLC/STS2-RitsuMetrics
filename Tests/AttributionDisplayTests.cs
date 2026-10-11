@@ -91,6 +91,19 @@ namespace STS2RitsuMetrics.Tests
                 .Single(source => source.SourceKey == Dark.Key).Value);
         }
 
+        [Fact]
+        public void TooltipComparisonKeepsCapturedContributionWhenSwitchingDisplayModes()
+        {
+            var stored = Captured().Snapshot();
+            var direct = AttributionDisplay.Project(stored, false);
+            var linked = AttributionDisplay.Project(stored, true);
+            var comparisonKey = AttributionDisplay.ComparisonPrefix + MetricIds.DamageContribution;
+            Assert.Equal(7m, direct.Sources[MetricIds.DamageContribution].Single(item => item.SourceKey == Card.Key).Value);
+            Assert.Equal(45m, direct.Sources[comparisonKey].Single(item => item.SourceKey == Card.Key).Value);
+            Assert.Equal(direct.Sources[comparisonKey], linked.Sources[comparisonKey]);
+            Assert.False(stored.Sources.ContainsKey(comparisonKey));
+        }
+
         private static MutablePlayerMetrics Captured()
         {
             var metrics = new MutablePlayerMetrics(Player);

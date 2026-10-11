@@ -603,5 +603,16 @@
   "source.overkillResolution": "生命上限",
   "source.legacyUnknownOrb": "未识别充能球（旧记录）",
   "source.unknown": "未知来源",
-  "entity.unknownPlayer": "未知玩家"
+  "entity.unknownPlayer": "未知玩家",
+  "damage.detail.process": "实际结算过程",
+  "dashboard.tooltip.events": "{0} 次事件",
+  "dashboard.tooltip.effects": "效果构成",
+  "dashboard.tooltip.average": "每事件均值",
+  "dashboard.tooltip.parentShare": "占{0}比例",
+  "damage.detail.provider": "{0}：分配 {1} · 实际 {2}",
+  "damage.detail.observed": "{0}：实测增减 {1} · 实际 {2}",
+  "damage.detail.base": "基础伤害：{0}",
+  "damage.detail.allocation": "连携贡献分配 · 平均边际贡献",
+  "damage.detail.share": "{0}：单独 {1} · 共同分摊 {2} · 分配 {3} · 实际 {4}",
+  "damage.detail.total": "实际贡献合计：{0} · 扣血贡献合计：{1}"
 }

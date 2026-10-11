@@ -92,7 +92,13 @@ namespace STS2RitsuMetrics.Api
         decimal EffectiveContribution,
         decimal? Factor,
         AttributionConfidence Confidence,
-        string Note = "");
+        string Note = "")
+    {
+        public decimal? AllocatedContribution { get; init; }
+        public decimal? StandaloneContribution { get; init; }
+        public bool UsesAverageMarginal { get; init; }
+        public IReadOnlyList<DamageAttributionShare>? Providers { get; init; }
+    }
 
     public static class DamageContributionSemantics
     {

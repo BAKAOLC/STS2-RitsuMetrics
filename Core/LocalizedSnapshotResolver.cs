@@ -215,10 +215,15 @@ namespace STS2RitsuMetrics.Core
             {
                 var contribution = damage.Contributions[index];
                 var source = ResolveSource(contribution.Source, resolver);
-                if (ReferenceEquals(source, contribution.Source) && contributions == null)
+                var providers = contribution.Providers?.Select(share => share with
+                {
+                    Source = ResolveSource(share.Source, resolver),
+                    Contributor = ResolveEntity(share.Contributor, localizePlayers, resolver),
+                }).ToArray();
+                if (ReferenceEquals(source, contribution.Source) && contributions == null && providers == null)
                     continue;
                 contributions ??= damage.Contributions.ToArray();
-                contributions[index] = contribution with { Source = source };
+                contributions[index] = contribution with { Source = source, Providers = providers };
             }
 
             DamageAttributionShare[]? attributionShares = null;

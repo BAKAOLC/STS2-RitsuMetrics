@@ -852,7 +852,9 @@ namespace STS2RitsuMetrics.Core
             var modified = calculation?.ModifiedAmount ?? hpLost + blocked + overkill;
             var requested = calculation?.RequestedAmount ?? modified;
             var contributions = BuildContributions(calculation, source, requested, modified, blocked, damageDealt,
-                overkill);
+                overkill, new(GameDescriptorFactory.DamageFloor(), GameDescriptorFactory.BlockResolution(),
+                    GameDescriptorFactory.DamageQuantization(), GameDescriptorFactory.OverkillResolution(),
+                    GameDescriptorFactory.Unknown()));
             var attributionShares = ResolveAttributionShares(damageReceiver, attributionModel, props,
                 damageDealt, directDealer, source, true);
             if (damageCardSource == null)
@@ -862,6 +864,13 @@ namespace STS2RitsuMetrics.Core
                     attributionShares = triggeredShares;
             }
             var effectiveHpShares = ScaleShares(attributionShares, hpLost);
+            contributions = contributions.Select(contribution => contribution with
+            {
+                Providers = contribution.Stage is DamageContributionStage.Base or DamageContributionStage.Execution
+                    ? ScaleShares(attributionShares, contribution.EffectiveContribution)
+                    : ResolveModifierShares(damageReceiver, calculation, contribution,
+                        Math.Abs(contribution.AllocatedContribution ?? contribution.RawContribution)),
+            }).ToList().AsReadOnly();
             if (directDealer == null && attributionShares.Length > 0 && source.Kind == AnalyticsSourceKind.Unknown)
                 source = attributionShares[0].Source;
             var breakdown = new DamageBreakdown(requested, modified, blocked, hpLost, overkill, damageDealt,
@@ -947,7 +956,7 @@ namespace STS2RitsuMetrics.Core
                     TimelineEventPhase.Instant,
                     role == DamageContributionRole.Settlement ? "damage.settlement" : "damage.modifier",
                     contribution.Source.DisplayName, target: receiver, source: contribution.Source,
-                    value: contribution.EffectiveContribution, parentEventId: damageEvent.EventId, bypassScope: true,
+                    value: contribution.RawContribution, parentEventId: damageEvent.EventId, bypassScope: true,
                     details: Details(("stage", contribution.Stage.ToString()),
                         ("role", role.ToString()),
                         ("settlement_kind", settlementKind.ToString()),
@@ -1022,9 +1031,12 @@ namespace STS2RitsuMetrics.Core
             if (grossContribution <= 0m)
                 return;
 
-            foreach (var contribution in positive)
+            var realizedAmounts = DamageContributionAllocation.Scale(
+                positive.Select(item => item.EffectiveContribution).ToArray(), realizedDamage);
+            for (var index = 0; index < positive.Length; index++)
             {
-                var realized = realizedDamage * contribution.EffectiveContribution / grossContribution;
+                var contribution = positive[index];
+                var realized = realizedAmounts[index];
                 var shares = contribution.Stage is DamageContributionStage.Base or DamageContributionStage.Execution
                     ? ScaleShares(directShares, realized)
                     : ResolveModifierShares(receiver, calculation, contribution, realized);
@@ -1046,14 +1058,15 @@ namespace STS2RitsuMetrics.Core
             }
         }
 
-        private static ReadOnlyCollection<DamageContribution> BuildContributions(
+        internal static ReadOnlyCollection<DamageContribution> BuildContributions(
             DamageCalculationCapture? calculation,
             SourceDescriptor source,
             decimal requested,
             decimal modified,
             decimal blocked,
             decimal effectiveDamage,
-            decimal overkill)
+            decimal overkill,
+            DamageSettlementSources settlementSources)
         {
             var hpLost = effectiveDamage - blocked;
             var appliedHpDamage = hpLost + overkill;
@@ -1066,11 +1079,11 @@ namespace STS2RitsuMetrics.Core
             if (calculation == null)
             {
                 if (blocked > 0m)
-                    contributions.Add(new(GameDescriptorFactory.BlockResolution(),
+                    contributions.Add(new(settlementSources.Block,
                         DamageContributionStage.Block,
                         modified, modified - blocked, -blocked, -blocked, null, AttributionConfidence.Exact));
                 if (overkill > 0m)
-                    contributions.Add(new(GameDescriptorFactory.OverkillResolution(),
+                    contributions.Add(new(settlementSources.Overkill,
                         DamageContributionStage.Overkill,
                         appliedHpDamage, hpLost, -overkill, -overkill, null, AttributionConfidence.Exact));
                 return FinalizeContributions(contributions, effectiveDamage, hpLost);
@@ -1094,15 +1107,15 @@ namespace STS2RitsuMetrics.Core
             {
                 var isLowerBound = capturedOutput < 0m && modified == 0m;
                 contributions.Add(new(isLowerBound
-                        ? GameDescriptorFactory.DamageFloor()
-                        : GameDescriptorFactory.Unknown(),
+                        ? settlementSources.Floor
+                        : settlementSources.Unknown,
                     isLowerBound ? DamageContributionStage.Clamp : DamageContributionStage.Additive,
                     capturedOutput, modified, residual, residual, null, AttributionConfidence.Derived,
                     isLowerBound ? "Host damage lower bound" : "Unexposed host damage modifier"));
             }
 
             if (blocked > 0m)
-                contributions.Add(new(GameDescriptorFactory.BlockResolution(), DamageContributionStage.Block,
+                contributions.Add(new(settlementSources.Block, DamageContributionStage.Block,
                     modified, modified - blocked, -blocked, -blocked, null, AttributionConfidence.Exact));
             if (calculation.HpLossPasses.Count == 0)
                 foreach (var modifier in calculation.Modifiers.Where(item =>
@@ -1121,19 +1134,19 @@ namespace STS2RitsuMetrics.Core
                     var capturedHpLossOutput = passModifiers.LastOrDefault()?.OutputValue ?? hpLossPass.InputValue;
                     var hpLossResidual = hpLossPass.OutputValue - capturedHpLossOutput;
                     if (hpLossResidual != 0m)
-                        contributions.Add(new(GameDescriptorFactory.Unknown(), DamageContributionStage.HpLoss,
+                        contributions.Add(new(settlementSources.Unknown, DamageContributionStage.HpLoss,
                             capturedHpLossOutput, hpLossPass.OutputValue, hpLossResidual, hpLossResidual, null,
                             AttributionConfidence.Derived, "Unexposed host HP-loss modifier"));
                 }
 
             var hpLossOutput = contributions.Sum(static contribution => contribution.RawContribution);
             if (hpLossOutput != appliedHpDamage)
-                contributions.Add(new(GameDescriptorFactory.DamageQuantization(),
+                contributions.Add(new(settlementSources.Quantization,
                     DamageContributionStage.Quantization, hpLossOutput, appliedHpDamage,
                     appliedHpDamage - hpLossOutput, appliedHpDamage - hpLossOutput, null,
                     AttributionConfidence.Exact, "Host integer HP settlement"));
             if (overkill > 0m)
-                contributions.Add(new(GameDescriptorFactory.OverkillResolution(),
+                contributions.Add(new(settlementSources.Overkill,
                     DamageContributionStage.Overkill,
                     appliedHpDamage, hpLost, -overkill, -overkill, null, AttributionConfidence.Exact));
             return FinalizeContributions(contributions, effectiveDamage, hpLost);
@@ -1158,24 +1171,7 @@ namespace STS2RitsuMetrics.Core
             List<DamageContribution> contributions,
             decimal effectiveDamage)
         {
-            var positiveTotal = contributions
-                .Where(contribution => contribution.RawContribution > 0m &&
-                                       DamageContributionSemantics.GetRole(contribution) !=
-                                       DamageContributionRole.Settlement)
-                .Sum(contribution => contribution.RawContribution);
-            var scale = positiveTotal == 0m ? 0m : effectiveDamage / positiveTotal;
-            for (var index = 0; index < contributions.Count; index++)
-            {
-                var contribution = contributions[index];
-                if (contribution.RawContribution <= 0m ||
-                    DamageContributionSemantics.GetRole(contribution) == DamageContributionRole.Settlement)
-                    continue;
-                contributions[index] = contribution with
-                {
-                    EffectiveContribution = contribution.RawContribution * scale,
-                };
-            }
-
+            DamageContributionAllocation.Apply(contributions, effectiveDamage);
             return contributions.AsReadOnly();
         }
 
@@ -1186,19 +1182,20 @@ namespace STS2RitsuMetrics.Core
             EntityDescriptor target,
             IReadOnlyDictionary<string, string> tags)
         {
-            if (contribution.RawContribution == 0m ||
+            var allocated = contribution.AllocatedContribution ?? contribution.RawContribution;
+            if (allocated == 0m ||
                 DamageContributionSemantics.GetRole(contribution) == DamageContributionRole.Settlement)
                 return;
             var model = calculation.Modifiers.FirstOrDefault(candidate =>
                 candidate.Source.Key == contribution.Source.Key && candidate.Stage == contribution.Stage)?.Model;
-            var isAmplification = contribution.RawContribution > 0m;
+            var isAmplification = allocated > 0m;
             var metricId = isAmplification
                 ? MetricIds.DamageAmplified
                 : MetricIds.DamageMitigated;
             var owner = GameDescriptorFactory.ModelOwner(model);
             var attributedAmount = isAmplification
                 ? Math.Max(contribution.EffectiveContribution, 0m)
-                : Math.Abs(contribution.RawContribution);
+                : Math.Abs(contribution.AllocatedContribution ?? contribution.RawContribution);
             if (attributedAmount <= 0m)
                 return;
             var shares = ResolveAttributionShares(receiver, model, calculation.Props, attributedAmount,
@@ -1493,9 +1490,11 @@ namespace STS2RitsuMetrics.Core
             var total = shares.Sum(share => share.EffectiveContribution);
             if (total <= 0m)
                 return [];
-            return shares.Select(share => share with
+            var amounts = DamageContributionAllocation.Scale(
+                shares.Select(share => share.EffectiveContribution).ToArray(), effectiveAmount);
+            return shares.Select((share, index) => share with
             {
-                EffectiveContribution = effectiveAmount * share.EffectiveContribution / total,
+                EffectiveContribution = amounts[index],
             }).ToArray();
         }
 
@@ -2330,13 +2329,16 @@ namespace STS2RitsuMetrics.Core
                 var total = _credits.Values.Sum(credit => credit.Weight);
                 if (total <= 0m || effectiveAmount <= 0m)
                     return [];
-                return _credits.Values
-                    .OrderByDescending(credit => credit.Weight)
-                    .Select(credit => new DamageAttributionShare(
+                var credits = _credits.Values.OrderByDescending(credit => credit.Weight)
+                    .ThenBy(credit => credit.Source.Key, StringComparer.Ordinal)
+                    .ThenBy(credit => credit.Player.Key, StringComparer.Ordinal)
+                    .ThenBy(credit => credit.OriginEventId, StringComparer.Ordinal).ToArray();
+                var amounts = DamageContributionAllocation.Scale(credits.Select(credit => credit.Weight).ToArray(), effectiveAmount);
+                return credits.Select((credit, index) => new DamageAttributionShare(
                         credit.Player,
                         useOriginSource ? credit.Source : source,
                         credit.Weight / total,
-                        effectiveAmount * credit.Weight / total,
+                        amounts[index],
                         confidence,
                         credit.OriginEventId))
                     .ToArray();
