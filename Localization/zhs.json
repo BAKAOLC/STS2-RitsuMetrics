@@ -378,6 +378,7 @@
   "settings.overlayEnabled": "显示数据分析面板",
   "settings.overlayEnabled.description": "也可以使用 {0} 快捷键显示或隐藏面板。",
   "settings.hideOutsideCombat": "战斗外自动隐藏",
+  "settings.automaticOverlayVisibility": "悬浮窗自动显示／隐藏",
   "settings.startCollapsed": "启动时折叠",
   "settings.lockWindow": "锁定窗口",
   "settings.showPercentages": "显示百分比",

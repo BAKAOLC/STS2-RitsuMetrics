@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
 using Godot;
+using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.Screens.ScreenContext;
 using MegaCrit.Sts2.Core.Runs;
+using STS2RitsuLib;
 using STS2RitsuLib.Ui.Shell.Theme;
 using STS2RitsuMetrics.Api;
 using STS2RitsuMetrics.Core;
@@ -17,6 +19,7 @@ namespace STS2RitsuMetrics.Ui
     internal sealed partial class DashboardHost : CanvasLayer
     {
         private const int FloatingWindowLayer = 120;
+        private IDisposable? _roomVisibilitySubscription;
         private const int RitsuLibWorkspaceLayer = 180;
         private const int ControlSurfaceLayer = RitsuLibWorkspaceLayer + 1;
         private const int BehindCapstoneLayer = -1;
@@ -93,6 +96,7 @@ namespace STS2RitsuMetrics.Ui
             ModData.HistoryReady += OnHistoryReady;
             ModData.SettingsChanged += OnSettingsChanged;
             ActiveScreenContext.Instance.Updated += ScheduleVisibilityUpdate;
+            _roomVisibilitySubscription = RitsuLibFramework.SubscribeLifecycle<RoomEnteredEvent>(_ => ScheduleVisibilityUpdate());
             LoadWindows();
             DrainOpenRequests();
             if (_windows.Count == 0 && ModData.Settings.OverlayEnabled)
@@ -119,6 +123,8 @@ namespace STS2RitsuMetrics.Ui
             ModData.HistoryReady -= OnHistoryReady;
             ModData.SettingsChanged -= OnSettingsChanged;
             ActiveScreenContext.Instance.Updated -= ScheduleVisibilityUpdate;
+            _roomVisibilitySubscription?.Dispose();
+            _roomVisibilitySubscription = null;
             if (_capstoneContainer != null)
                 _capstoneContainer.Changed -= OnCapstoneChanged;
             foreach (var window in _windows.Values)
@@ -886,10 +892,7 @@ namespace STS2RitsuMetrics.Ui
             UpdateCapstoneState();
             var settings = ModData.Settings;
             var runManager = RunManager.Instance;
-            var hasLiveCombat = Main.Repository.HasLiveCombat;
-            var isCombatScreenActive = ReferenceEquals(
-                ActiveScreenContext.Instance.GetCurrentScreen(),
-                NCombatRoom.Instance);
+            var isCombatRoom = runManager.DebugOnlyGetState()?.CurrentRoom is CombatRoom;
             var isRunCompletionView = runManager.IsInProgress &&
                                       (runManager.IsGameOver ||
                                        runManager.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true);
@@ -897,8 +900,8 @@ namespace STS2RitsuMetrics.Ui
             var showFloatingDashboards = DashboardVisibility.ShouldShowFloatingDashboards(
                 settings.OverlayEnabled,
                 runManager.IsInProgress,
-                hasLiveCombat,
-                isCombatScreenActive,
+                settings.AutomaticOverlayVisibility,
+                isCombatRoom,
                 hasCompletedCombat);
             var becameVisible = false;
             // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
@@ -965,7 +968,7 @@ namespace STS2RitsuMetrics.Ui
             var settings = ModData.Settings;
             var displaySettings = HashCode.Combine(
                 settings.OverlayEnabled,
-                settings.HideOutsideCombat,
+                settings.AutomaticOverlayVisibility,
                 settings.ShowPercentages,
                 settings.ScalePercent,
                 settings.WindowOpacityPercent,
@@ -973,6 +976,7 @@ namespace STS2RitsuMetrics.Ui
                 settings.ToggleKey,
                 RunManager.Instance.IsInProgress);
             return HashCode.Combine(displaySettings, RunManager.Instance.IsGameOver,
+                RunManager.Instance.DebugOnlyGetState()?.CurrentRoom,
                 RunManager.Instance.DebugOnlyGetState()?.CurrentRoom?.IsVictoryRoom == true);
         }
 

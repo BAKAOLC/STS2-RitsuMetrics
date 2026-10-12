@@ -7,12 +7,12 @@ namespace STS2RitsuMetrics.Ui
         internal static bool ShouldShowFloatingDashboards(
             bool overlayEnabled,
             bool runInProgress,
-            bool hasLiveCombat,
-            bool isCombatScreenActive,
+            bool automaticVisibility,
+            bool isCombatRoom,
             bool hasCompletedCombat)
         {
             return overlayEnabled && runInProgress &&
-                   (hasLiveCombat && isCombatScreenActive || hasCompletedCombat);
+                   (!automaticVisibility || isCombatRoom || hasCompletedCombat);
         }
     }
 }

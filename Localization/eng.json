@@ -378,6 +378,7 @@
   "settings.overlayEnabled": "Show analytics overlay",
   "settings.overlayEnabled.description": "The {0} hotkey can also show or hide the overlay.",
   "settings.hideOutsideCombat": "Hide outside combat",
+  "settings.automaticOverlayVisibility": "Automatic overlay visibility",
   "settings.startCollapsed": "Start collapsed",
   "settings.lockWindow": "Lock window",
   "settings.showPercentages": "Show percentages",

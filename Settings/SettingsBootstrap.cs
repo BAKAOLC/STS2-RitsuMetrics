@@ -37,6 +37,9 @@ namespace STS2RitsuMetrics.Settings
                                 "The {0} hotkey can also show or hide the overlay.",
                                 ModData.Settings.ToggleKey),
                             toggleKeyBinding))
+                    .AddToggle("automatic_overlay_visibility", T("settings.automaticOverlayVisibility", "Automatic overlay visibility"),
+                        Binding(settings => settings.AutomaticOverlayVisibility,
+                            (settings, value) => settings.AutomaticOverlayVisibility = value))
                     .AddToggle("show_percentages", T("settings.showPercentages", "Show percentages"),
                         Binding(settings => settings.ShowPercentages,
                             (settings, value) => settings.ShowPercentages = value))

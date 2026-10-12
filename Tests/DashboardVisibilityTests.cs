@@ -7,24 +7,24 @@ namespace STS2RitsuMetrics.Tests
     public sealed class DashboardVisibilityTests
     {
         [Fact]
-        public void LiveCombatDashboardIsHiddenWhenAnotherScreenIsActive()
+        public void AutomaticVisibilityHidesInNonCombatRoom()
         {
             Assert.False(DashboardVisibility.ShouldShowFloatingDashboards(
                 overlayEnabled: true,
                 runInProgress: true,
-                hasLiveCombat: true,
-                isCombatScreenActive: false,
+                automaticVisibility: true,
+                isCombatRoom: false,
                 hasCompletedCombat: false));
         }
 
         [Fact]
-        public void LiveCombatDashboardIsVisibleOnCombatScreen()
+        public void CombatRoomRemainsVisibleAfterCombatEnds()
         {
             Assert.True(DashboardVisibility.ShouldShowFloatingDashboards(
                 overlayEnabled: true,
                 runInProgress: true,
-                hasLiveCombat: true,
-                isCombatScreenActive: true,
+                automaticVisibility: true,
+                isCombatRoom: true,
                 hasCompletedCombat: false));
         }
 
@@ -34,9 +34,20 @@ namespace STS2RitsuMetrics.Tests
             Assert.True(DashboardVisibility.ShouldShowFloatingDashboards(
                 overlayEnabled: true,
                 runInProgress: true,
-                hasLiveCombat: false,
-                isCombatScreenActive: false,
+                automaticVisibility: true,
+                isCombatRoom: false,
                 hasCompletedCombat: true));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void ManualVisibilityShowsThroughoutRunButNeverOutsideRun(bool combatRoom)
+        {
+            Assert.True(DashboardVisibility.ShouldShowFloatingDashboards(true, true, false, combatRoom, false));
+            Assert.False(DashboardVisibility.ShouldShowFloatingDashboards(true, false, false, combatRoom, true));
+            Assert.False(DashboardVisibility.ShouldShowFloatingDashboards(true, false, true, combatRoom, true));
+            Assert.False(DashboardVisibility.ShouldShowFloatingDashboards(false, true, false, combatRoom, true));
         }
     }
 }
